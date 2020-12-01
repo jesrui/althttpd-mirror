@@ -53,7 +53,7 @@ Source Code
 
 The complete source code for althttpd is contained within a single
 C-code file with no dependences outside of the standard C library.
-The source code file is named "[althttpd.c](/file/misc/althttpd.c)".
+The source code file is named "[althttpd.c](/file/althttpd.c)".
 To build and install althttpd, run the following command:
 
 >
@@ -185,7 +185,7 @@ On the sqlite.org website, the relevant lines of the
 >
     cert = /etc/letsencrypt/live/sqlite.org/fullchain.pem
     key = /etc/letsencrypt/live/sqlite.org/privkey.pem
-    [https]
+    \[https\]
     accept       = :::443
     TIMEOUTclose = 0
     exec         = /usr/bin/althttpd
