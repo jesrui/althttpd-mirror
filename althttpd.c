@@ -827,7 +827,6 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
       StartResponse("302 Temporary Redirect");
       break;
   }
-  StartResponse("302 Temporary Redirect");
   if( zServerPort==0 || zServerPort[0]==0 || strcmp(zServerPort,"80")==0 ){
     nOut += printf("Location: %s://%s%s%s\r\n",
                    zHttp, zServerName, zPath, zQuerySuffix);
