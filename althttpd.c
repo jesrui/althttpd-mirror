@@ -2124,9 +2124,9 @@ void ProcessOneRequest(int forceClose){
     }
     if( useHttps ){
       putenv("HTTPS=on");
-      putenv("REQUEST_SCHEMA=https");
+      putenv("REQUEST_SCHEME=https");
     }else{
-      putenv("REQUEST_SCHEMA=http");
+      putenv("REQUEST_SCHEME=http");
     }
 
     /* For the POST method all input has been written to a temporary file,
