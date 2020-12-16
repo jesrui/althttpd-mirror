@@ -120,6 +120,9 @@
 **  --max-age SEC    The value for "Cache-Control: max-age=%d".  Defaults to
 **                   120 seconds.
 **
+**  --max-cpu SEC    Maximum number of seconds of CPU time allowed per
+**                   HTTP connection.  Default 30.  0 means no limit.
+**
 **  --debug          Disables input timeouts.  This is useful for debugging
 **                   when inputs is being typed in manually.
 **
@@ -248,6 +251,7 @@
 #include <pwd.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <netinet/in.h>
@@ -272,6 +276,9 @@
 #endif
 #ifndef MAX_CONTENT_LENGTH
 #define MAX_CONTENT_LENGTH 250000000  /* Max length of HTTP request content */
+#endif
+#ifndef MAX_CPU
+#define MAX_CPU 30                /* Max CPU cycles in seconds */
 #endif
 
 /*
@@ -334,6 +341,7 @@ static char *default_path = "/bin:/usr/bin";  /* Default PATH variable */
 static char *zScgi = 0;          /* Value of the SCGI env variable */
 static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
+static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 /*
 ** Mapping between CGI variable names and values stored in
@@ -1378,7 +1386,12 @@ static void CgiHandleReply(FILE *in){
   int iStatus = 0;             /* Reply status code */
   char zLine[1000];            /* One line of reply from the CGI script */
 
-  if( useTimeout ) alarm(15);
+  if( useTimeout ){
+    /* Disable the timeout, so that we can implement Hanging-GET or
+    ** long-poll style CGIs.  The RLIMIT_CPU will serve as a safety
+    ** to help prevent a run-away CGI */
+    alarm(0);
+  }
   while( fgets(zLine,sizeof(zLine),in) && !isspace((unsigned char)zLine[0]) ){
     if( strncasecmp(zLine,"Location:",9)==0 ){
       StartResponse("302 Redirect");
@@ -1426,7 +1439,6 @@ static void CgiHandleReply(FILE *in){
   }else{
     StartResponse("200 OK");
   }
-  if( useTimeout ) alarm(60*5);
   if( nRes>0 ){
     aRes[nRes] = 0;
     printf("%s", aRes);
@@ -1653,6 +1665,7 @@ void ProcessOneRequest(int forceClose){
   signal(SIGALRM, Timeout);
   signal(SIGSEGV, Timeout);
   signal(SIGPIPE, Timeout);
+  signal(SIGXCPU, Timeout);
   if( useTimeout ) alarm(15);
 
   /* Get the first line of the request and parse out the
@@ -2226,7 +2239,7 @@ typedef union {
 /*
 ** Implement an HTTP server daemon listening on port iPort.
 **
-** As new connections arrive, fork a child and let child return
+** As new connections arrive, fork a child and let the child return
 ** out of this procedure call.  The child will handle the request.
 ** The parent never returns from this procedure.
 **
@@ -2375,6 +2388,8 @@ int main(int argc, char **argv){
       zLogFile = zArg;
     }else if( strcmp(z,"-max-age")==0 ){
       mxAge = atoi(zArg);
+    }else if( strcmp(z,"-max-cpu")==0 ){
+      maxCpu = atoi(zArg);
     }else if( strcmp(z,"-https")==0 ){
       useHttps = atoi(zArg);
       zHttp = useHttps ? "https" : "http";
@@ -2382,6 +2397,7 @@ int main(int argc, char **argv){
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
       standalone = 1;
+     
     }else if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
@@ -2450,6 +2466,15 @@ int main(int argc, char **argv){
     Malfunction(550, /* LOG: server startup failed */
                 "failed to start server");
   }
+
+#ifdef RLIMIT_CPU
+  if( maxCpu>0 ){
+    struct rlimit rlim;
+    rlim.rlim_cur = maxCpu;
+    rlim.rlim_max = maxCpu;
+    setrlimit(RLIMIT_CPU, &rlim);
+  }
+#endif
 
   /* Drop root privileges.
   */
