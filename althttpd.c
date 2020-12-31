@@ -1692,7 +1692,11 @@ void ProcessOneRequest(int forceClose){
     MakeLogEntry(0, 200); /* LOG: bad protocol in HTTP header */
     exit(0);
   }
-  if( zScript[0]==0 ) NotFound(210); /* LOG: Empty request URI */
+  if( zScript[0]!='/' ) NotFound(210); /* LOG: Empty request URI */
+  while( zScript[1]=='/' ){
+    zScript++;
+    zRealScript++;
+  }
   if( forceClose ){
     closeConnection = 1;
   }else if( zProtocol[5]<'1' || zProtocol[7]<'1' ){
