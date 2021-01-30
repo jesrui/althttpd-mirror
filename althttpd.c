@@ -1835,6 +1835,7 @@ void ProcessOneRequest(int forceClose){
       "OPPO A33 Build",
       "SemrushBot",
       "MegaIndex.ru",
+      "MJ12bot",
     };
     size_t ii;
     for(ii=0; ii<sizeof(azDisallow)/sizeof(azDisallow[0]); ii++){
