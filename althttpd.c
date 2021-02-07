@@ -639,24 +639,16 @@ time_t ParseRfc822Date(const char *zDate){
   char zMonth[4];
   static const char *const azMonths[] =
     {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", 0};
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
   if( 7==sscanf(zDate, "%3[A-Za-z], %d %3[A-Za-z] %d %d:%d:%d", zIgnore,
                        &mday, zMonth, &year, &hour, &min, &sec)){
     if( year > 1900 ) year -= 1900;
-    for(mon=0; azMonths[mon]; mon++){
+    for(mon=0; mon<12; mon++){
       if( !strncmp( azMonths[mon], zMonth, 3 )){
         int nDay;
         int isLeapYr;
         static int priorDays[] =
          {  0, 31, 59, 90,120,151,181,212,243,273,304,334 };
-        if( mon<0 ){
-          int nYear = (11 - mon)/12;
-          year -= nYear;
-          mon += nYear*12;
-        }else if( mon>11 ){
-          year += mon/12;
-          mon %= 12;
-        }
         isLeapYr = year%4==0 && (year%100!=0 || (year+300)%400==0);
         yday = priorDays[mon] + mday - 1;
         if( isLeapYr && mon>1 ) yday++;
