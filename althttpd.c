@@ -2235,7 +2235,7 @@ typedef union {
 } address;
 
 /*
-** Implement an HTTP server daemon listening on port iPort.
+** Implement an HTTP server daemon listening on port zPort.
 **
 ** As new connections arrive, fork a child and let the child return
 ** out of this procedure call.  The child will handle the request.
