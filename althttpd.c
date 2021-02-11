@@ -450,7 +450,7 @@ static void MakeLogEntry(int exitCode, int lineNum){
     getrusage(RUSAGE_CHILDREN, &children);
     if( (log = fopen(zFilename,"a"))!=0 ){
 #ifdef COMBINED_LOG_FORMAT
-      strftime(zDate, sizeof(zDate), "%d/%b/%Y:%H:%M:%S %z", pTm);
+      strftime(zDate, sizeof(zDate), "%d/%b/%Y:%H:%M:%S %Z", pTm);
       fprintf(log, "%s - - [%s] \"%s %s %s\" %s %d \"%s\" \"%s\"\n",
               zRemoteAddr, zDate, zMethod, zScript, zProtocol,
               zReplyStatus, nOut, zReferer, zAgent);
@@ -617,7 +617,7 @@ static char *Rfc822Date(time_t t){
   struct tm *tm;
   static char zDate[100];
   tm = gmtime(&t);
-  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S %z", tm);
+  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S %Z", tm);
   return zDate;
 }
 
