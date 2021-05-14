@@ -1828,6 +1828,9 @@ void ProcessOneRequest(int forceClose){
       "SemrushBot",
       "MegaIndex.ru",
       "MJ12bot",
+      "Chrome/0.A.B.C",
+      "Neevabot/",
+      "BLEXBot/",
     };
     size_t ii;
     for(ii=0; ii<sizeof(azDisallow)/sizeof(azDisallow[0]); ii++){
