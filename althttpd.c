@@ -699,7 +699,7 @@ static void StartResponse(const char *zResultCode){
 static void NotFound(int lineno){
   StartResponse("404 Not Found");
   nOut += printf(
-    "Content-type: text/html\r\n"
+    "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title lineno=\"%d\">Not Found</title></head>\n"
     "<body><h1>Document Not Found</h1>\n"
@@ -715,7 +715,7 @@ static void NotFound(int lineno){
 static void Forbidden(int lineno){
   StartResponse("403 Forbidden");
   nOut += printf(
-    "Content-type: text/plain\r\n"
+    "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Access denied\n"
   );
@@ -732,7 +732,7 @@ static void NotAuthorized(const char *zRealm){
   StartResponse("401 Authorization Required");
   nOut += printf(
     "WWW-Authenticate: Basic realm=\"%s\"\r\n"
-    "Content-type: text/html\r\n"
+    "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title>Not Authorized</title></head>\n"
     "<body><h1>401 Not Authorized</h1>\n"
@@ -747,7 +747,7 @@ static void NotAuthorized(const char *zRealm){
 static void CgiError(void){
   StartResponse("500 Error");
   nOut += printf(
-    "Content-type: text/html\r\n"
+    "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title>CGI Program Error</title></head>\n"
     "<body><h1>CGI Program Error</h1>\n"
@@ -782,7 +782,7 @@ static void Timeout(int iSig){
 static void CgiScriptWritable(void){
   StartResponse("500 CGI Configuration Error");
   nOut += printf(
-    "Content-type: text/plain\r\n"
+    "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "The CGI program %s is writable by users other than its owner.\n",
     zRealScript);
@@ -798,7 +798,7 @@ static void Malfunction(int linenum, const char *zFormat, ...){
   va_start(ap, zFormat);
   StartResponse("500 Server Malfunction");
   nOut += printf(
-    "Content-type: text/plain\r\n"
+    "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Web server malfunctioned; error number %d\n\n", linenum);
   if( zFormat ){
@@ -1340,7 +1340,7 @@ static int SendFile(
   nOut += DateTag("Last-Modified", pStat->st_mtime);
   nOut += printf("Cache-Control: max-age=%d\r\n", mxAge);
   nOut += printf("ETag: \"%s\"\r\n", zETag);
-  nOut += printf("Content-type: %s\r\n",zContentType);
+  nOut += printf("Content-type: %s; charset=utf-8\r\n",zContentType);
   nOut += printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
   fflush(stdout);
   if( strcmp(zMethod,"HEAD")==0 ){
@@ -1677,7 +1677,7 @@ void ProcessOneRequest(int forceClose){
   if( zProtocol==0 || strncmp(zProtocol,"HTTP/",5)!=0 || strlen(zProtocol)!=8 ){
     StartResponse("400 Bad Request");
     nOut += printf(
-      "Content-type: text/plain\r\n"
+      "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "This server does not understand the requested protocol\n"
     );
@@ -1702,7 +1702,7 @@ void ProcessOneRequest(int forceClose){
        && strcmp(zMethod,"HEAD")!=0 ){
     StartResponse("501 Not Implemented");
     nOut += printf(
-      "Content-type: text/plain\r\n"
+      "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "The %s method is not implemented on this server.\n",
       zMethod);
@@ -1901,7 +1901,7 @@ void ProcessOneRequest(int forceClose){
     if( len>MAX_CONTENT_LENGTH ){
       StartResponse("500 Request too large");
       nOut += printf(
-        "Content-type: text/plain\r\n"
+        "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Too much POST data\n"
       );
@@ -1919,7 +1919,7 @@ void ProcessOneRequest(int forceClose){
     if( out==0 ){
       StartResponse("500 Cannot create /tmp file");
       nOut += printf(
-        "Content-type: text/plain\r\n"
+        "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Could not open \"%s\" for writing\n", zTmpNam
       );
