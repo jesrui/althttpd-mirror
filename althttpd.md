@@ -226,7 +226,7 @@ To defend against mischief, there are restrictions on names of files that
 althttpd will serve.  Within the request URI, all characters other than
 alphanumerics and ",-./:~" are converted into a single "_".  Furthermore,
 if any path element of the request URI begins with "." or "-" then
-althttpd always returns a 404 Not Found error.  Thus is it safe to put
+althttpd always returns a 404 Not Found error.  Thus it is safe to put
 auxiliary files (databases or other content used by CGI, for example)
 in the document hierarchy as long as the filenames being with "." or "-".
 
