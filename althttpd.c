@@ -806,8 +806,9 @@ static void Malfunction(int linenum, const char *zFormat, ...){
     printf("\n");
     nOut++;
   }
+  va_end(ap);
   MakeLogEntry(0, linenum);
-  exit(0);       
+  exit(0);
 }
 
 /*
