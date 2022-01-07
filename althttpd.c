@@ -206,20 +206,22 @@
 **      fallback: fallback-filename
 **      relight: relight-command
 **
-** The first line specifies the location and TCP/IP port of the SCGI server
-** that will handle the request.  Subsequent lines determine what to do if
-** the SCGI server cannot be contacted.  If the "relight:" line is present,
-** then the relight-command is run using system() and the connection is
-** retried after a 1-second delay.  Use "&" at the end of the relight-command
-** to run it in the background.  Make sure the relight-command does not
-** send generate output, or that output will become part of the SCGI reply.
-** Add a ">/dev/null" suffix (before the "&") to the relight-command if
-** necessary to suppress output.  If there is no relight-command, or if the
-** relight is attempted but the SCGI server still cannot be contacted, then
-** the content of the fallback-filename file is returned as a substitute for
-** the SCGI request.  The mimetype is determined by the suffix on the
-** fallback-filename.  The fallback-filename would typically be an error
-** message indicating that the service is temporarily unavailable.
+** The first line specifies the location and TCP/IP port of the SCGI
+** server that will handle the request.  Subsequent lines determine
+** what to do if the SCGI server cannot be contacted.  If the
+** "relight:" line is present, then the relight-command is run using
+** system() and the connection is retried after a 1-second delay.  Use
+** "&" at the end of the relight-command to run it in the background.
+** Make sure the relight-command does not generate output, or that
+** output will become part of the SCGI reply.  Add a ">/dev/null"
+** suffix (before the "&") to the relight-command if necessary to
+** suppress output.  If there is no relight-command, or if the relight
+** is attempted but the SCGI server still cannot be contacted, then
+** the content of the fallback-filename file is returned as a
+** substitute for the SCGI request.  The mimetype is determined by the
+** suffix on the fallback-filename.  The fallback-filename would
+** typically be an error message indicating that the service is
+** temporarily unavailable.
 **
 ** Basic Authorization:
 **
@@ -407,7 +409,7 @@ static struct TlsState {
 **
 ** If it reads anything, it returns zBuf.
 */
-char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
+static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
   int n = 0;
   int i;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
@@ -426,7 +428,7 @@ char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
 ** Read cleartext bytes that have been received from the client and
 ** decrypted by the SSL server codec.
 */
-size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
+static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   int n;
   TlsServerConn *pServer = (TlsServerConn*)pServerArg;
   if( pServer->atEof ) return 0;
@@ -450,8 +452,9 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
     if(1){
-      MARKER(("SSL_write() of %d bytes failed: SSL code #%d\n%.*s\n", nBuf,
-              SSL_get_error(pServer->ssl, n), (int)nBuf, (char*)zBuf));
+      MARKER(("SSL_write() of %d bytes failed: SSL code #%d, errno=%d %s\n%.*s\n", nBuf,
+              SSL_get_error(pServer->ssl, n), errno, strerror(errno),
+              (int)nBuf, (char*)zBuf));
     }
     return -SSL_get_error(pServer->ssl, n);
   }else{
@@ -476,7 +479,7 @@ static int althttpd_vprintf(char const * fmt, va_list va){
   }else{
     enum { PF_BUFFER_SIZE = 1024 * 2 };
     static char pfBuffer[PF_BUFFER_SIZE] = {0};
-    int sz = vsnprintf(pfBuffer, PF_BUFFER_SIZE, fmt, va);
+    const int sz = vsnprintf(pfBuffer, PF_BUFFER_SIZE, fmt, va);
     if(sz<PF_BUFFER_SIZE){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
@@ -1633,11 +1636,12 @@ static void *tls_new_server(int iSocket){
 static void tls_close_server(void *pServerArg){
   TlsServerConn *pServer = (TlsServerConn*)pServerArg;
   SSL_free(pServer->ssl);
+  memset(pServer, 0, sizeof(TlsServerConn));
   free(pServer);
 }
 
 static void tls_atexit(void){
-  if(tlsState.sslCon){
+  if(0 && tlsState.sslCon){
     tls_close_server(tlsState.sslCon);
     tlsState.sslCon = NULL;
   }
@@ -2084,6 +2088,16 @@ static int tls_init_conn(int iSocket){
   if(0==iSocket){/*unused arg*/}
   return 0;
 }
+#if 0
+static void tls_close_conn(void){
+#ifdef ENABLE_TLS
+  if(tlsState.sslCon){
+    tls_close_server(tlsState.sslCon);
+    tlsState.sslCon = NULL;
+  }
+#endif
+}
+#endif
 
 /*
 ** This routine processes a single HTTP request on standard input and
