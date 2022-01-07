@@ -346,12 +346,21 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 void Malfunction(int errNo, const char *zFormat, ...);
 
+#if 1
 /* Only for debugging */
+void my_debug(char const * fmt,...){
+  va_list va;
+  va_start(va, fmt);
+  vfprintf(stderr, fmt, va);
+  va_end(va);
+}
 #define MARKER(pfexp)                                               \
-  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
-    printf pfexp;                                                   \
+  do{ my_debug("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    my_debug pfexp;                                                   \
   } while(0)
-
+#else
+#define MARKER(pfexp) (void)0
+#endif
 #ifdef ENABLE_TLS
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
@@ -440,6 +449,8 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
+    /*MARKER(("SSL_write() of %d bytes failed: %d\n%.*s\n", nBuf,
+      SSL_get_error(pServer->ssl, n), (int)nBuf, (char*)zBuf));*/
     return -SSL_get_error(pServer->ssl, n);
   }else{
     return n;
@@ -1614,7 +1625,7 @@ static void *tls_new_server(int iSocket){
 }
 
 /*
-** Close a server-side code previously returned from ssl_new_server().
+** Close a server-side code previously returned from tls_new_server().
 */
 static void tls_close_server(void *pServerArg){
   TlsServerConn *pServer = (TlsServerConn*)pServerArg;
@@ -1847,7 +1858,6 @@ static void CgiHandleReply(FILE *in){
       nRes += nLine;
     }
   }
-
   /* Copy everything else thru without change or analysis.
   */
   if( rangeEnd>0 && seenContentLength && rangeStart<contentLength ){
@@ -1856,7 +1866,7 @@ static void CgiHandleReply(FILE *in){
       rangeEnd = contentLength-1;
     }
     nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
-                    rangeStart, rangeEnd, contentLength);
+                            rangeStart, rangeEnd, contentLength);
     contentLength = rangeEnd + 1 - rangeStart;
   }else{
     StartResponse("200 OK");
@@ -1884,9 +1894,13 @@ static void CgiHandleReply(FILE *in){
       aRes[nRes++] = c;
     }
     if( nRes ){
+      /*MARKER(("Read back CGI response (%d bytes):\n%.*s\n",
+        (int)nRes, (int)nRes, aRes));*/
       aRes[nRes] = 0;
       nOut += althttpd_printf("Content-length: %d\r\n\r\n", (int)nRes);
+      /*MARKER(("nOut=%d\n", (int)nOut));*/
       nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
+      /*MARKER(("nOut=%d\n", (int)nOut));*/
     }else{
       nOut += althttpd_printf("Content-length: 0\r\n\r\n");
     }
@@ -2384,6 +2398,7 @@ void ProcessOneRequest(int forceClose){
     n = althttpd_fread(zBuf,1,len,stdin);
     nIn += n;
     fwrite(zBuf,1,n,out);
+    /*MARKER(("Wrote POST contents:\n%.*s\n", (int)n, zBuf));*/
     free(zBuf);
     fclose(out);
   }
@@ -2462,7 +2477,6 @@ void ProcessOneRequest(int forceClose){
     }
   }
   zHome = StrDup(zLine);
-
   /* Change directories to the root of the HTTP filesystem
   */
   if( chdir(zHome)!=0 ){
@@ -2606,6 +2620,7 @@ void ProcessOneRequest(int forceClose){
       }
       close(0);
       open(zTmpNam, O_RDONLY);
+      /*MARKER(("Opened tmpfile %s as CGI stdin\n", zTmpNam));*/
     }
 
     if( strncmp(zBaseFilename,"nph-",4)==0 ){
@@ -2640,6 +2655,7 @@ void ProcessOneRequest(int forceClose){
         }
         close(px[1]);
         for(i=3; close(i)==0; i++){}
+        /*MARKER(("exec'ding %s\n", zBaseFilename));*/
         execl(zBaseFilename, zBaseFilename, (char*)0);
         exit(0);
       }
@@ -2844,9 +2860,24 @@ int main(int argc, const char **argv){
     }else if( strcmp(z,"-max-cpu")==0 ){
       maxCpu = atoi(zArg);
     }else if( strcmp(z,"-https")==0 ){
-      useHttps = atoi(zArg)>0 ? 1 : 0;
-      zHttp = useHttps ? "https" : "http";
-      if( useHttps ) zRemoteAddr = getenv("REMOTE_HOST");
+      int const x = atoi(zArg);
+      if(x<=0){
+        useHttps = 0;
+        zHttp = "http";
+      }else{
+        zHttp = "https";
+        zRemoteAddr = getenv("REMOTE_HOST");
+        useHttps = 1;
+        if(2==x){
+#if ENABLE_TLS
+          z = "-tls";
+          goto arg_tls;
+#else
+          Malfunction(510,"Built-in TLS support is not available. "
+                      "Use --https 0 or 1.");
+#endif
+        }
+      }
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
       if(0==standalone) standalone = 1;
@@ -2875,6 +2906,7 @@ int main(int argc, const char **argv){
     }
 #ifdef ENABLE_TLS
     else if( 0==strncmp(z,"-tls",4) ){
+      arg_tls:
       if(strcmp(z,"-tls")==0){
         useHttps = atoi(zArg)>0 ? 2 : 0;
         zHttp = useHttps ? "https" : "http";

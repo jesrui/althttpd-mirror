@@ -36,16 +36,20 @@ using a few command-line arguments. This helps to keep the
 configuration simple and mitigates worries about about introducing
 a security vulnerability through a misconfigured web server.
 
-Althttpd does not itself handle TLS connections.  For HTTPS, althttpd
-relies on stunnel4 to handle TLS protocol negotiation, decryption, and
-encryption.
-
 Because each althttpd process only needs to service a single
 connection, althttpd is single threaded.  Furthermore, each process
 only lives for the duration of a single connection, which means that
 althttpd does not need to worry too much about memory leaks.
 These design factors help keep the althttpd source code simple,
 which facilitates security auditing and analysis.
+
+For serving TLS connections there are two options:
+
+1. althttpd can be built with the `ENABLE_TLS` macro defined and linked to
+`-lssl -lcrypto`, then started with the `-tls 1` or `-tls-cert-file` flags.
+
+2. althttpd can be started with the `-https 1` flag and started via an
+external connection service such as stunnel4.
 
 
 Source Code
@@ -61,6 +65,13 @@ To build and install althttpd, run the following command:
 
 The althttpd source code is heavily commented and accessible.
 It should be relatively easy to customize for specialized needs.
+
+To build althttpd with built-in TLS support using libssl:
+
+>
+    gcc -Os -o /usr/bin/althttpd -fPIC -DENABLE_SSL -lssl -lcrypto \
+    althttpd.c
+
 
 Setup Using Xinetd
 ------------------
@@ -218,6 +229,38 @@ mode, listening on port 8080.
 The author of althttpd has only ever used stand-alone mode for testing.
 Since althttpd does not itself support TLS encryption, the
 stunnel4 setup is preferred for production websites.
+
+Stand-alone with HTTPS
+----------------------
+
+If althttpd is built with TLS support then it can be told to operate
+in HTTPS mode with one of the following options:
+
+>
+    althttpd -root ~/www --port 8043 -tls 1
+
+Is equivalent to:
+
+>
+    althttpd -root ~/www --port 8043 -https 2
+
+Both of those options use a compiled-in self-signed SSL certificate
+***which is only intended for testing purposes***. In order to provide
+your own certificate, you must concatenate a PEM-format SSL private
+key and certificate into a single file:
+
+>
+    cat the-key.pem the-cert.pem > my-cert.pem
+
+And then start althttpd with:
+
+>
+    althttpd -root ~/www --port 8043 --tls-cert-file my-cert.pem
+
+Note that the certificate is read before althttpd drops root
+privileges, so the certificate may live somewhere inaccessible to
+the non-root user under which the althttpd process will run.
+
 
 Security Features
 -----------------
