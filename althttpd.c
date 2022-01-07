@@ -346,7 +346,7 @@ static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
-void Malfunction(int errNo, const char *zFormat, ...);
+static void Malfunction(int errNo, const char *zFormat, ...);
 
 #if 1
 /* Only for debugging */
@@ -1182,7 +1182,6 @@ end_of_upkfm:
 static void ssl_init_server(const char *zCertFile,
                             const char *zKeyFile){
   if( tlsState.isInit==0 ){
-    /*const char *zTlsCert; see below*/
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
@@ -1205,19 +1204,7 @@ static void ssl_init_server(const char *zCertFile,
         Malfunction(500,"Error loading PRIVATE KEY from file \"%s\"",
                     zKeyFile);
       }
-    }else
-#if 0
-      /* TODO/MISSING: ability to store a cert persistently... */
-    if( (zTlsCert = db_get("ssl-cert",0))!=0 ){
-      if( sslctx_use_cert_from_mem(tlsState.ctx, zTlsCert, -1)
-          || sslctx_use_pkey_from_mem(tlsState.ctx, zTlsCert, -1)
-      ){
-        Malfunction(500,"Error loading the CERT from the"
-                     " 'ssl-cert' setting");
-      }
-    }else
-#endif
-    if( sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
+    }else if( sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
         || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
       Malfunction(500,"Error loading self-signed CERT");
     }
