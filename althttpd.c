@@ -449,8 +449,10 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
-    /*MARKER(("SSL_write() of %d bytes failed: %d\n%.*s\n", nBuf,
-      SSL_get_error(pServer->ssl, n), (int)nBuf, (char*)zBuf));*/
+    if(1){
+      MARKER(("SSL_write() of %d bytes failed: SSL code #%d\n%.*s\n", nBuf,
+              SSL_get_error(pServer->ssl, n), (int)nBuf, (char*)zBuf));
+    }
     return -SSL_get_error(pServer->ssl, n);
   }else{
     return n;
@@ -1616,6 +1618,7 @@ static void *tls_new_server(int iSocket){
   if(NULL==pServer){
     Malfunction(500,"Cannot allocate TlsServerConn.");
   }
+  assert(NULL!=tlsState.ctx);
   pServer->ssl = SSL_new(tlsState.ctx);
   pServer->atEof = 0;
   pServer->iSocket = iSocket;
@@ -2115,7 +2118,7 @@ void ProcessOneRequest(int forceClose){
   }
   nRequest++;
   if(tls_init_conn(0)){
-    /* Never reuse TLS connections. */
+    /* Never(?) reuse TLS connections. */
     forceClose = 1;
   }
   /*
