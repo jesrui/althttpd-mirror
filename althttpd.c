@@ -450,8 +450,8 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
 ** be able to handle all of the headers output by althttpd as of the
 ** time of this writing.
 */
-static int althttpd_vprintf(char const * fmt, va_list va){
 #ifdef ENABLE_TLS
+static int althttpd_vprintf(char const * fmt, va_list va){
   if(useHttps!=2){
     return vprintf(fmt, va);
   }else{
@@ -465,11 +465,12 @@ static int althttpd_vprintf(char const * fmt, va_list va){
       return 0;
     }
   }
-#else
-  return vprintf(fmt, va);
-#endif
 }
+#else
+#define althttpd_vprintf vprintf
+#endif
 
+#ifdef ENABLE_TLS
 static int althttpd_printf(char const * fmt, ...){
   int rc;
   va_list va;
@@ -478,6 +479,9 @@ static int althttpd_printf(char const * fmt, ...){
   va_end(va);
   return rc;
 }
+#else
+#define althttpd_printf printf
+#endif
 
 /*
 ** Mapping between CGI variable names and values stored in
