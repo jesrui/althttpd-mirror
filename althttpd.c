@@ -780,7 +780,7 @@ static char *Rfc822Date(time_t t){
   struct tm *tm;
   static char zDate[100];
   tm = gmtime(&t);
-  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S %Z", tm);
+  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S GMT", tm);
   return zDate;
 }
 
