@@ -75,7 +75,7 @@
 **
 **   (10) Content files that end with ".scgi" and that contain text of the
 **        form "SCGI hostname port" will format an SCGI request and send it
-**        to hostname:port, the relay back the reply.  Error behavior is
+**        to hostname:port, then relay back the reply.  Error behavior is
 **        determined by subsequent lines of the .scgi file.  See SCGI below
 **        for details.
 **
@@ -104,7 +104,7 @@
 **                   FILE name is expanded using strftime() if it contains
 **                   at least one '%' and is not too long.
 **
-**  --https          Indicates that input is coming over SSL and is being
+**  --https BOOLEAN  Indicates that input is coming over SSL and is being
 **                   decoded upstream, perhaps by stunnel.  (This program
 **                   only understands plaintext.)
 **
@@ -121,10 +121,11 @@
 **                   120 seconds.
 **
 **  --max-cpu SEC    Maximum number of seconds of CPU time allowed per
-**                   HTTP connection.  Default 30.  0 means no limit.
+**                   HTTP connection.  Default 30 (build option:
+**                   -DMAX_CPU=integer). 0 means no limit.
 **
 **  --debug          Disables input timeouts.  This is useful for debugging
-**                   when inputs is being typed in manually.
+**                   when inputs are being typed in manually.
 **
 ** Command-line options can take either one or two initial "-" characters.
 ** So "--debug" and "-debug" mean the same thing, for example.
@@ -146,7 +147,7 @@
 **
 ** (3)  The length of an HTTP request is limited to MAX_CONTENT_LENGTH bytes
 **      (default: 250 million).  Any HTTP request longer than this fails
-**      with an error.
+**      with an error. (Build option: -DMAX_CONTENT_LENGTH=integer)
 **
 ** (4)  There are hard-coded time-outs on each HTTP request.  If this process
 **      waits longer than the timeout for the complete request, or for CGI
