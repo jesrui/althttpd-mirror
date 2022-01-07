@@ -287,7 +287,7 @@
 ** saves having to pass information to subroutines as parameters, and
 ** makes the executable smaller...
 */
-static char *zRoot = 0;          /* Root directory of the website */
+static const char *zRoot = 0;    /* Root directory of the website */
 static char *zTmpNam = 0;        /* Name of a temporary file */
 static char zTmpNamBuf[500];     /* Space to hold the temporary filename */
 static char *zProtocol = 0;      /* The protocol being using by the browser */
@@ -323,13 +323,13 @@ static int nIn = 0;              /* Number of bytes of input */
 static int nOut = 0;             /* Number of bytes of output */
 static char zReplyStatus[4];     /* Reply status code */
 static int statusSent = 0;       /* True after status line is sent */
-static char *zLogFile = 0;       /* Log to this file */
+static const char *zLogFile = 0; /* Log to this file */
 static int debugFlag = 0;        /* True if being debugged */
 static struct timeval beginTime; /* Time when this process starts */
 static int closeConnection = 0;  /* True to send Connection: close in reply */
 static int nRequest = 0;         /* Number of requests processed */
 static int omitLog = 0;          /* Do not make logfile entries if true */
-static int useHttps = 0;         /* True to use HTTPS: instead of HTTP: */
+static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel), 2=builtin TLS support */
 static char *zHttp = "http";     /* http or https */
 static int useTimeout = 1;       /* True to use times */
 static int standalone = 0;       /* Run as a standalone server (no inetd) */
@@ -343,6 +343,43 @@ static char *zScgi = 0;          /* Value of the SCGI env variable */
 static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
+
+#ifdef ENABLE_TLS
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+typedef struct SslServerConn {
+  SSL *ssl;          /* The SSL codec */
+  int atEof;         /* True when EOF reached. */
+  int iSocket;       /* The socket */
+} SslServerConn;
+
+/*
+** There can only be a single OpenSSL IO connection open at a time.
+** State information about that IO is stored in the following
+** local variables:
+*/
+static struct SslState {
+  int isInit; /* 0: uninit 1: init as client 2: init as server */
+  SSL_CTX *ctx;
+  const char * zCertFile; /* -tls-cert-file CLI arg */
+#if 0 /* the following are pending potential porting from fossil */
+  BIO *iBio;        /* OpenSSL I/O abstraction */
+  char *errMsg;  /* Text of most recent OpenSSL error */
+  SSL *ssl;
+#endif
+} sslState = {
+  0/*isInit*/,
+  NULL/*SSL_CTX *ctx*/,
+  NULL/*zCertFile*/,
+#if 0
+  NULL/*iBio*/,
+  NULL/*errMsg*/,
+  NULL/*ssl*/
+#endif
+};
+#endif /* ENABLE_TLS */
 
 /*
 ** Mapping between CGI variable names and values stored in
@@ -381,17 +418,16 @@ static struct {
   { "SERVER_PROTOCOL",             &zProtocol },
 };
 
-
 /*
 ** Double any double-quote characters in a string.
 */
-static char *Escape(char *z){
+static char *Escape(const char *z){
   size_t i, j;
   size_t n;
   char c;
   char *zOut;
   for(i=0; (c=z[i])!=0 && c!='"'; i++){}
-  if( c==0 ) return z;
+  if( c==0 ) return (char *)z;
   n = 1;
   for(i++; (c=z[i])!=0; i++){ if( c=='"' ) n++; }
   zOut = malloc( i+n+1 );
@@ -425,8 +461,8 @@ static void MakeLogEntry(int exitCode, int lineNum){
     struct tm *pTm;
     struct rusage self, children;
     int waitStatus;
-    char *zRM = zRemoteUser ? zRemoteUser : "";
-    char *zFilename;
+    const char *zRM = zRemoteUser ? zRemoteUser : "";
+    const char *zFilename;
     size_t sz;
     char zDate[200];
     char zExpLogFile[500];
@@ -849,7 +885,7 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
 ** decoded value of that string.  Characters of input that are not
 ** valid base-64 characters (such as spaces and newlines) are ignored.
 */
-void Decode64(char *z64){
+static void Decode64(char *z64){
   char *zData;
   int n64;
   int i, j;
@@ -889,6 +925,187 @@ void Decode64(char *z64){
   }
   zData[j] = 0;
 }
+
+#ifdef ENABLE_TLS
+/* This is a self-signed cert in the PEM format that can be used when
+** no other certs are available.
+*/
+static const char sslSelfCert[] = 
+"-----BEGIN CERTIFICATE-----\n"
+"MIIDMTCCAhkCFGrDmuJkkzWERP/ITBvzwwI2lv0TMA0GCSqGSIb3DQEBCwUAMFQx\n"
+"CzAJBgNVBAYTAlVTMQswCQYDVQQIDAJOQzESMBAGA1UEBwwJQ2hhcmxvdHRlMRMw\n"
+"EQYDVQQKDApGb3NzaWwtU0NNMQ8wDQYDVQQDDAZGb3NzaWwwIBcNMjExMjI3MTEz\n"
+"MTU2WhgPMjEyMTEyMjcxMTMxNTZaMFQxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJO\n"
+"QzESMBAGA1UEBwwJQ2hhcmxvdHRlMRMwEQYDVQQKDApGb3NzaWwtU0NNMQ8wDQYD\n"
+"VQQDDAZGb3NzaWwwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCCbTU2\n"
+"6GRQHQqLq7vyZ0OxpAxmgfAKCxt6eIz+jBi2ZM/CB5vVXWVh2+SkSiWEA3UZiUqX\n"
+"xZlzmS/CglZdiwLLDJML8B4OiV72oivFH/vJ7+cbvh1dTxnYiHuww7GfQngPrLfe\n"
+"fiIYPDk1GTUJHBQ7Ue477F7F8vKuHdVgwktF/JDM6M60aSqlo2D/oysirrb+dlur\n"
+"Tlv0rjsYOfq6bLAajoL3qi/vek6DNssoywbge4PfbTgS9g7Gcgncbcet5pvaS12J\n"
+"avhFcd4JU4Ity49Hl9S/C2MfZ1tE53xVggRwKz4FPj65M5uymTdcxtjKXtCxIE1k\n"
+"KxJxXQh7rIYjm+RTAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAFkdtpqcybAzJN8G\n"
+"+ONuUm5sXNbWta7JGvm8l0BTSBcCUtJA3hn16iJqXA9KmLnaF2denC4EYk+KlVU1\n"
+"QXxskPJ4jB8A5B05jMijYv0nzCxKhviI8CR7GLEEGKzeg9pbW0+O3vaVehoZtdFX\n"
+"z3SsCssr9QjCLiApQxMzW1Iv3od2JXeHBwfVMFrWA1VCEUCRs8OSW/VOqDPJLVEi\n"
+"G6wxc4kN9dLK+5S29q3nzl24/qzXoF8P9Re5KBCbrwaHgy+OEEceq5jkmfGFxXjw\n"
+"pvVCNry5uAhH5NqbXZampUWqiWtM4eTaIPo7Y2mDA1uWhuWtO6F9PsnFJlQHCnwy\n"
+"s/TsrXk=\n"
+"-----END CERTIFICATE-----\n";
+
+/* This is the private-key corresponding to the cert above
+*/
+static const char sslSelfPKey[] = 
+"-----BEGIN PRIVATE KEY-----\n"
+"MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCCbTU26GRQHQqL\n"
+"q7vyZ0OxpAxmgfAKCxt6eIz+jBi2ZM/CB5vVXWVh2+SkSiWEA3UZiUqXxZlzmS/C\n"
+"glZdiwLLDJML8B4OiV72oivFH/vJ7+cbvh1dTxnYiHuww7GfQngPrLfefiIYPDk1\n"
+"GTUJHBQ7Ue477F7F8vKuHdVgwktF/JDM6M60aSqlo2D/oysirrb+dlurTlv0rjsY\n"
+"Ofq6bLAajoL3qi/vek6DNssoywbge4PfbTgS9g7Gcgncbcet5pvaS12JavhFcd4J\n"
+"U4Ity49Hl9S/C2MfZ1tE53xVggRwKz4FPj65M5uymTdcxtjKXtCxIE1kKxJxXQh7\n"
+"rIYjm+RTAgMBAAECggEANfTH1vc8yIe7HRzmm9lsf8jF+II4s2705y2H5qY+cvYx\n"
+"nKtZJGOG1X0KkYy7CGoFv5K0cSUl3lS5FVamM/yWIzoIex/Sz2C1EIL2aI5as6ez\n"
+"jB6SN0/J+XI8+Vt7186/rHxfdIPpxuzjHbxX3HTpScETNWcLrghbrPxakbTPPxwt\n"
+"+x7QlPmmkFNuMfvkzToFf9NdwL++44TeBPOpvD/Lrw+eyqdth9RJPq9cM96plh9V\n"
+"HuRqeD8+QNafaXBdSQs3FJK/cDK/vWGKZWIfFVSDbDhwYljkXGijreFjtXQfkkpF\n"
+"rl1J87/H9Ee7z8fTD2YXQHl+0/rghAVtac3u54dpQQKBgQC2XG3OEeMrOp9dNkUd\n"
+"F8VffUg0ecwG+9L3LCe7U71K0kPmXjV6xNnuYcNQu84kptc5vI8wD23p29LaxdNc\n"
+"9m0lcw06/YYBOPkNphcHkINYZTvVJF10mL3isymzMaTtwDkZUkOjL1B+MTiFT/qp\n"
+"ARKrTYGJ4HxY7+tUkI5pUmg4PQKBgQC3GA4d1Rz3Pb/RRpcsZgWknKsKhoN36mSn\n"
+"xFJ3wPBvVv2B1ltTMzh/+the0ty6clzMrvoLERzRcheDsNrc/j/TUVG8sVdBYJwX\n"
+"tMZyFW4NVMOErT/1ukh6jBqIMBo6NJL3EV/AKj0yniksgKOr0/AAduAccnGST8Jd\n"
+"SHOdjwvHzwKBgGZBq/zqgNTDuYseHGE07CMgcDWkumiMGv8ozlq3mSR0hUiPOTPP\n"
+"YFjQjyIdPXnF6FfiyPPtIvgIoNK2LVAqiod+XUPf152l4dnqcW13dn9BvOxGyPTR\n"
+"lWCikFaAFviOWjY9r9m4dU1dslDmySqthFd0TZgPvgps9ivkJ0cdw30NAoGAMC/E\n"
+"h1VvKiK2OP27C5ROJ+STn1GHiCfIFd81VQ8SODtMvL8NifgRBp2eFFaqgOdYRQZI\n"
+"CGGYlAbS6XXCJCdF5Peh62dA75PdgN+y2pOJQzjrvB9cle9Q4++7i9wdCvSLOTr5\n"
+"WDnFoWy+qVexu6crovOmR9ZWzYrwPFy1EOJ010ECgYBl7Q+jmjOSqsVwhFZ0U7LG\n"
+"diN+vXhWfn1wfOWd8u79oaqU/Oy7xyKW2p3H5z2KFrBM/vib53Lh4EwFZjcX+jVG\n"
+"krAmbL+M/hP7z3TD2UbESAzR/c6l7FU45xN84Lsz5npkR8H/uAHuqLgb9e430Mjx\n"
+"YNMwdb8rChHHChNZu6zuxw==\n"
+"-----END PRIVATE KEY-----\n";
+
+/*
+** Read a PEM certificate from memory and push it into an SSL_CTX.
+** Return the number of errors.
+*/
+static int sslctx_use_cert_from_mem(
+  SSL_CTX *ctx,
+  const char *pData,
+  int nData
+){
+  BIO *in;
+  int rc = 1;
+  X509 *x = 0;
+  X509 *cert = 0;
+
+  in = BIO_new_mem_buf(pData, nData);
+  if( in==0 ) goto end_of_ucfm;
+  x = X509_new();
+  if( x==0 ) goto end_of_ucfm;
+  cert = PEM_read_bio_X509(in, &x, 0, 0);
+  if( cert==0 ) goto end_of_ucfm;
+  rc = SSL_CTX_use_certificate(ctx, x)<=0;
+end_of_ucfm:
+  X509_free(x);
+  BIO_free(in);
+  return rc;
+}
+
+/*
+** Read a PEM private key from memory and add it to an SSL_CTX.
+** Return the number of errors.
+*/
+static int sslctx_use_pkey_from_mem(
+  SSL_CTX *ctx,
+  const char *pData,
+  int nData
+){
+  int rc = 1;
+  BIO *in;
+  EVP_PKEY *pkey = 0;
+
+  in = BIO_new_mem_buf(pData, nData);
+  if( in==0 ) goto end_of_upkfm;
+  pkey = PEM_read_bio_PrivateKey(in, 0, 0, 0);
+  if( pkey==0 ) goto end_of_upkfm;
+  rc = SSL_CTX_use_PrivateKey(ctx, pkey)<=0;
+  EVP_PKEY_free(pkey);
+end_of_upkfm:
+  BIO_free(in);
+  return rc;
+}
+
+/*
+** Initialize the SSL library so that it is able to handle
+** server-side connections.  Invokes Malfunction() if there are
+** any problems (so does not return on error).
+**
+** If zKeyFile and zCertFile are not NULL, then they are the names
+** of disk files that hold the certificate and private-key for the
+** server.  If zCertFile is not NULL but zKeyFile is NULL, then
+** zCertFile is assumed to be a concatenation of the certificate and
+** the private-key in the PEM format.
+**
+** If zCertFile is NULL or empty then a built-in self-signed cert is
+** used.
+**
+** Error messages may contain the paths to the given files, but this
+** function is called before the server starts listening for requests,
+** so those will never be sent to clients.
+*/
+static void ssl_init_server(const char *zCertFile,
+                            const char *zKeyFile){
+  if( sslState.isInit==0 ){
+    /*const char *zTlsCert; see below*/
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    sslState.ctx = SSL_CTX_new(SSLv23_server_method());
+    if( sslState.ctx==0 ){
+      ERR_print_errors_fp(stderr);
+      Malfunction(500,"Error initializing the SSL server");
+    }
+    if( zCertFile && zCertFile[0] ){
+      if( SSL_CTX_use_certificate_file(sslState.ctx,zCertFile,
+                                       SSL_FILETYPE_PEM)<=0 ){
+        ERR_print_errors_fp(stderr);
+        Malfunction(500,"Error loading CERT file \"%s\"",
+                    zCertFile);
+      }
+      if( zKeyFile==0 ) zKeyFile = zCertFile;
+      if( SSL_CTX_use_PrivateKey_file(sslState.ctx, zKeyFile,
+                                      SSL_FILETYPE_PEM)<=0 ){
+        ERR_print_errors_fp(stderr);
+        Malfunction(500,"Error loading PRIVATE KEY from file \"%s\"",
+                    zKeyFile);
+      }
+    }else
+#if 0
+      /* TODO/MISSING: ability to store a cert persistently... */
+    if( (zTlsCert = db_get("ssl-cert",0))!=0 ){
+      if( sslctx_use_cert_from_mem(sslState.ctx, zTlsCert, -1)
+          || sslctx_use_pkey_from_mem(sslState.ctx, zTlsCert, -1)
+      ){
+        Malfunction(500,"Error loading the CERT from the"
+                     " 'ssl-cert' setting");
+      }
+    }else
+#endif
+    if( sslctx_use_cert_from_mem(sslState.ctx, sslSelfCert, -1)
+        || sslctx_use_pkey_from_mem(sslState.ctx, sslSelfPKey, -1) ){
+      Malfunction(500,"Error loading self-signed CERT");
+    }
+    if( !SSL_CTX_check_private_key(sslState.ctx) ){
+      Malfunction(500,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
+           zKeyFile, zCertFile);
+    }
+    SSL_CTX_set_mode(sslState.ctx, SSL_MODE_AUTO_RETRY);
+    sslState.isInit = 2;
+  }else{
+    assert( sslState.isInit==2 );
+  }
+}
+#endif /*ENABLE_TLS*/
 
 /*
 ** Check to see if basic authorization credentials are provided for
@@ -1649,7 +1866,7 @@ void ProcessOneRequest(int forceClose){
     char zBuf[1000];
     Malfunction(190,   /* LOG: chdir() failed */
          "cannot chdir to [%s] from [%s]",
-         zRoot, getcwd(zBuf,999));
+         zRoot, getcwd(zBuf,sizeof(zBuf)-1));
   }
   nRequest++;
 
@@ -2365,10 +2582,9 @@ int http_server(const char *zPort, int localOnly){
   exit(1);
 }
 
-
-int main(int argc, char **argv){
+int main(int argc, const char **argv){
   int i;                    /* Loop counter */
-  char *zPermUser = 0;      /* Run daemon with this user's permissions */
+  const char *zPermUser = 0;/* Run daemon with this user's permissions */
   const char *zPort = 0;    /* Implement an HTTP server process */
   int useChrootJail = 1;    /* True to use a change-root jail */
   struct passwd *pwd = 0;   /* Information about the user */
@@ -2380,8 +2596,8 @@ int main(int argc, char **argv){
   /* Parse command-line arguments
   */
   while( argc>1 && argv[1][0]=='-' ){
-    char *z = argv[1];
-    char *zArg = argc>=3 ? argv[2] : "0";
+    const char *z = argv[1];
+    const char *zArg = argc>=3 ? argv[2] : "0";
     if( z[0]=='-' && z[1]=='-' ) z++;
     if( strcmp(z,"-user")==0 ){
       zPermUser = zArg;
@@ -2399,8 +2615,7 @@ int main(int argc, char **argv){
       if( useHttps ) zRemoteAddr = getenv("REMOTE_HOST");
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
-      standalone = 1;
-     
+      if(0==standalone) standalone = 1;
     }else if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
@@ -2423,11 +2638,38 @@ int main(int argc, char **argv){
         Malfunction(501, /* LOG: cannot open --input file */
                     "cannot open --input file \"%s\"\n", zArg);
       }
-    }else if( strcmp(z, "-datetest")==0 ){
+    }
+#ifdef ENABLE_TLS
+    else if( 0==strncmp(z,"-tls",4) ){
+      if(strcmp(z, "-tls-cert-file")==0 ){
+        useHttps = 2;
+        zHttp = "https";
+        sslState.zCertFile = zArg;
+        zRemoteAddr = getenv("REMOTE_HOST")
+          /* This cannot possibly be set at this point in a
+             standalone server, but could be via xinetd. */;
+      }else if(strcmp(z,"-tls")==0){
+        useHttps = atoi(zArg)>0 ? 2 : 0;
+        zHttp = useHttps ? "https" : "http";
+        if(useHttps){
+          standalone = 2;
+          if(0==zPort){
+            zPort = "443";
+          }
+        }
+      }else{
+        goto err_unknown_flag;
+      }
+    }
+#endif
+    else if( strcmp(z, "-datetest")==0 ){
       TestParseRfc822Date();
       printf("Ok\n");
       exit(0);
     }else{
+#ifdef ENABLE_TLS
+    err_unknown_flag:
+#endif
       Malfunction(510, /* LOG: unknown command-line argument on launch */
                   "unknown argument: [%s]\n", z);
     }
@@ -2442,7 +2684,16 @@ int main(int argc, char **argv){
                   "no --root specified");
     }
   }
-  
+
+#if ENABLE_TLS
+  /* We need to read the cert before chroot'ing to allow that the cert
+  ** is stored in space not readable by the --user.
+  */
+  if(useHttps>1){
+    ssl_init_server(sslState.zCertFile, sslState.zCertFile);
+  }
+#endif
+
   /* Change directories to the root of the HTTP filesystem.  Then
   ** create a chroot jail there.
   */
