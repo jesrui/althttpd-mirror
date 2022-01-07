@@ -346,6 +346,12 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 void Malfunction(int errNo, const char *zFormat, ...);
 
+/* Only for debugging */
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
 #ifdef ENABLE_TLS
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
@@ -452,7 +458,7 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
 */
 #ifdef ENABLE_TLS
 static int althttpd_vprintf(char const * fmt, va_list va){
-  if(useHttps!=2){
+  if(useHttps!=2 || NULL==tlsState.sslCon){
     return vprintf(fmt, va);
   }else{
     enum { PF_BUFFER_SIZE = 1024 * 2 };
@@ -461,7 +467,8 @@ static int althttpd_vprintf(char const * fmt, va_list va){
     if(sz<PF_BUFFER_SIZE){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
-      Malfunction(500,"Output buffer is too small.");
+      Malfunction(500,"Output buffer is too small. Wanted %d bytes.",
+                  sz);
       return 0;
     }
   }
@@ -1856,7 +1863,7 @@ static void CgiHandleReply(FILE *in){
   }
   if( nRes>0 ){
     aRes[nRes] = 0;
-    althttpd_printf("%s", aRes);
+    althttpd_fwrite(aRes, nRes, 1, stdout);
     nOut += nRes;
     nRes = 0;
   }
@@ -1878,7 +1885,8 @@ static void CgiHandleReply(FILE *in){
     }
     if( nRes ){
       aRes[nRes] = 0;
-      nOut += althttpd_printf("Content-length: %d\r\n\r\n%s", (int)nRes, aRes);
+      nOut += althttpd_printf("Content-length: %d\r\n\r\n", (int)nRes);
+      nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
     }else{
       nOut += althttpd_printf("Content-length: 0\r\n\r\n");
     }
@@ -2867,14 +2875,7 @@ int main(int argc, const char **argv){
     }
 #ifdef ENABLE_TLS
     else if( 0==strncmp(z,"-tls",4) ){
-      if(strcmp(z, "-tls-cert-file")==0 ){
-        useHttps = 2;
-        zHttp = "https";
-        tlsState.zCertFile = zArg;
-        zRemoteAddr = getenv("REMOTE_HOST")
-          /* This cannot possibly be set at this point in a
-             standalone server, but could be via xinetd. */;
-      }else if(strcmp(z,"-tls")==0){
+      if(strcmp(z,"-tls")==0){
         useHttps = atoi(zArg)>0 ? 2 : 0;
         zHttp = useHttps ? "https" : "http";
         if(useHttps){
@@ -2883,6 +2884,13 @@ int main(int argc, const char **argv){
             zPort = "443";
           }
         }
+      }else if(strcmp(z, "-tls-cert-file")==0 ){
+        useHttps = 2;
+        zHttp = "https";
+        tlsState.zCertFile = zArg;
+        zRemoteAddr = getenv("REMOTE_HOST")
+          /* This cannot possibly be set at this point in a
+             standalone server, but could be via xinetd. */;
       }else{
         goto err_unknown_flag;
       }
@@ -3000,8 +3008,10 @@ int main(int argc, const char **argv){
   }
 
   /* Process the input stream */
-  for(i=0; i<100; i++){
-    ProcessOneRequest(0);
+  if(useHttps!=2){
+    for(i=0; i<100; i++){
+      ProcessOneRequest(0);
+    }
   }
   ProcessOneRequest(1);
   exit(0);
