@@ -348,7 +348,7 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 static void Malfunction(int errNo, const char *zFormat, ...);
 
-#if 1
+#if 0
 /* Only for debugging */
 void my_debug(char const * fmt,...){
   va_list va;
@@ -446,13 +446,14 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
 static int tls_write_server(void *pServerArg, void const *zBuf,
                             size_t nBuf){
   int n;
-  TlsServerConn *pServer = (TlsServerConn*)pServerArg;
+  TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf<=0 ) return 0;
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
     if(1){
-      MARKER(("SSL_write() of %d bytes failed: SSL code #%d, errno=%d %s\n%.*s\n", nBuf,
+      MARKER(("SSL_write() of %d bytes failed: SSL code #%d, "
+              "errno=%d %s\n%.*s\n", nBuf,
               SSL_get_error(pServer->ssl, n), errno, strerror(errno),
               (int)nBuf, (char*)zBuf));
     }
@@ -1605,7 +1606,7 @@ static int countSlashes(const char *z){
 static void *tls_new_server(int iSocket){
   TlsServerConn *pServer = malloc(sizeof(*pServer));
   BIO *b = pServer ? BIO_new_socket(iSocket, 0) : NULL;
-  if(NULL==pServer){
+  if(NULL==b){
     Malfunction(500,"Cannot allocate TlsServerConn.");
   }
   assert(NULL!=tlsState.ctx);
@@ -1628,7 +1629,7 @@ static void tls_close_server(void *pServerArg){
 }
 
 static void tls_atexit(void){
-  if(0 && tlsState.sslCon){
+  if(tlsState.sslCon){
     tls_close_server(tlsState.sslCon);
     tlsState.sslCon = NULL;
   }
@@ -1818,94 +1819,6 @@ static void stream_file(FILE *in, FILE *out){
     fwrite(streamBuf, 1, n, out);
   }
 }
-
-
-#if 1
-#define ENABLE_POPEN2
-#endif
-#ifdef ENABLE_POPEN2
-/*
-** Create a child process running shell command "zCmd".  *ppOut is
-** a FILE that becomes the standard input of the child process.
-** (The caller writes to *ppOut in order to send text to the child.)
-** *ppIn is stdout from the child process.  (The caller
-** reads from *ppIn in order to receive input from the child.)
-** Note that *ppIn is an unbuffered file descriptor, not a FILE.
-** The process ID of the child is written into *pChildPid.
-**
-** Return the number of errors.
-*/
-static int popen2(
-  const char *zCmd,      /* Command to run in the child process */
-  int *pfdIn,            /* Read from child using this file descriptor */
-  FILE **ppOut,          /* Write to child using this file descriptor */
-  int *pChildPid,        /* PID of the child process */
-  int bDirect            /* 0: run zCmd as a shell cmd.  1: run directly */
-){
-  int pin[2], pout[2];
-  *pfdIn = 0;
-  *ppOut = 0;
-  *pChildPid = 0;
-
-  if( pipe(pin)<0 ){
-    return 1;
-  }
-  if( pipe(pout)<0 ){
-    close(pin[0]);
-    close(pin[1]);
-    return 1;
-  }
-  *pChildPid = fork();
-  if( *pChildPid<0 ){
-    close(pin[0]);
-    close(pin[1]);
-    close(pout[0]);
-    close(pout[1]);
-    *pChildPid = 0;
-    return 1;
-  }
-  signal(SIGPIPE,SIG_IGN);
-  if( *pChildPid==0 ){
-    int fd;
-    int nErr = 0;
-    /* This is the child process */
-    close(0);
-    fd = dup(pout[0]);
-    if( fd!=0 ) nErr++;
-    close(pout[0]);
-    close(pout[1]);
-    close(1);
-    fd = dup(pin[1]);
-    if( fd!=1 ) nErr++;
-    close(pin[0]);
-    close(pin[1]);
-    if( bDirect ){
-      execl(zCmd, zCmd, (char*)0);
-    }else{
-      execl("/bin/sh", "/bin/sh", "-c", zCmd, (char*)0);
-    }
-    return 1;
-  }else{
-    /* This is the parent process */
-    close(pin[1]);
-    *pfdIn = pin[0];
-    close(pout[0]);
-    *ppOut = fdopen(pout[1], "w");
-    return 0;
-  }
-}
-
-/*
-** Close the connection to a child process previously created using
-** popen2().
-*/
-static void pclose2(int fdIn, FILE *pOut, int childPid){
-  close(fdIn);
-  fclose(pOut);
-  while( waitpid(0, 0, WNOHANG)>0 ) {}
-  if(childPid){/*unused*/}
-}
-#endif /*ENABLE_POPEN2*/
 
 /*
 ** A CGI or SCGI script has run and is sending its reply back across
@@ -2171,7 +2084,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
 static int tls_init_conn(int iSocket){
 #ifdef ENABLE_TLS
   if(2==useHttps){
-    assert(NULL==tlsState.sslCon);
+    /*assert(NULL==tlsState.sslCon);*/
     if(NULL==tlsState.sslCon){
       tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
       if(NULL==tlsState.sslCon){
@@ -2207,8 +2120,12 @@ static void tls_close_conn(void){
 ** If the connection should be closed, this routine calls exit() and
 ** thus never returns.  If this routine does return it means that another
 ** HTTP request may appear on the wire.
+**
+** socketId must be 0 (if running via xinetd/etc) or the socket ID
+** accept()ed by http_server(). It is only used for built-in TLS
+** mode.
 */
-void ProcessOneRequest(int forceClose){
+void ProcessOneRequest(int forceClose, int socketId){
   int i, j, j0;
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
@@ -2228,8 +2145,8 @@ void ProcessOneRequest(int forceClose){
          zRoot, getcwd(zBuf,sizeof(zBuf)-1));
   }
   nRequest++;
-  if(tls_init_conn(0)){
-    /* Never(?) reuse TLS connections. */
+  if(tls_init_conn(socketId)){
+    /* Never(?) reuse TLS connections? */
     forceClose = 1;
   }
   /*
@@ -2622,6 +2539,7 @@ void ProcessOneRequest(int forceClose){
             && access(zLine,R_OK)==0 ){
           zRealScript = StrDup(&zLine[j0]);
           Redirect(zRealScript, 302, 1, 370); /* LOG: redirect to not-found */
+          tls_close_conn();
           return;
         }else{
           j--;
@@ -2658,6 +2576,7 @@ void ProcessOneRequest(int forceClose){
         ** none of the relative URLs in the delivered document will be
         ** correct. */
         Redirect(zRealScript,301,1,410); /* LOG: redirect to add trailing / */
+        tls_close_conn();
         return;
       }
       break;
@@ -2680,7 +2599,10 @@ void ProcessOneRequest(int forceClose){
   ** process it.
   */
   sprintf(zLine, "%s/-auth", zDir);
-  if( access(zLine,R_OK)==0 && !CheckBasicAuthorization(zLine) ) return;
+  if( access(zLine,R_OK)==0 && !CheckBasicAuthorization(zLine) ){
+    tls_close_conn();
+    return;
+  }
 
   /* Take appropriate action
   */
@@ -2742,7 +2664,10 @@ void ProcessOneRequest(int forceClose){
       ** dealing with a "non-parsed headers" CGI script.  Just exec()
       ** it directly and let it handle all its own header generation.
       */
-      /* UNTESTED WITH ENABLE_TLS! */
+      /* FAILS WITH TLS for unknown reasons:
+      **
+      ** Error code: SSL_ERROR_RX_RECORD_TOO_LONG
+      */
       execl(zBaseFilename,zBaseFilename,(char*)0);
       /* NOTE: No log entry written for nph- scripts */
       exit(0);
@@ -2756,29 +2681,6 @@ void ProcessOneRequest(int forceClose){
     ** fork the CGI process.  Once everything is done, we should be
     ** able to read the output of CGI on the "in" stream.
     */
-#ifdef ENABLE_POPEN2
-    {
-      int fdFromChild = -1;
-      FILE * toChild = NULL;
-      int childPid = -1;
-      int rc = popen2(zBaseFilename, &fdFromChild, &toChild, &childPid, 1);
-      if(rc){
-        Malfunction(500,"CGI popen() failed.");
-      }
-      if(cgiStdin){
-        stream_file(cgiStdin, toChild);
-        fclose(cgiStdin);
-        cgiStdin = NULL;
-      }      
-      in = fdopen(fdFromChild, "rb");
-      if( in==0 ){
-        CgiError();
-      }else{
-        CgiHandleReply(in);
-      }
-      pclose2(fdFromChild, toChild, childPid);
-    }
-#else
     {
       int px[2];
       if( pipe(px) ){
@@ -2807,7 +2709,6 @@ void ProcessOneRequest(int forceClose){
     }else{
       CgiHandleReply(in);
     }
-#endif /* !ENABLE_POPEN2 */
   }else if( lenFile>5 && strcmp(&zFile[lenFile-5],".scgi")==0 ){
     /* Any file that ends with ".scgi" is assumed to be text of the
     ** form:
@@ -2820,8 +2721,8 @@ void ProcessOneRequest(int forceClose){
     ** actual content file name, report that as a 404 error. */
     NotFound(460); /* LOG: Excess URI content past static file name */
   }else{
-    /* If it isn't executable then it
-    ** must a simple file that needs to be copied to output.
+    /* If it isn't executable then it must be a simple file that needs
+    ** to be copied to output.
     */
     if( SendFile(zFile, lenFile, &statbuf) ){
       tls_close_conn();
@@ -2860,8 +2761,11 @@ typedef union {
 **
 ** Return 0 to each child as it runs.  If unable to establish a
 ** listening socket, return non-zero.
+**
+** When it accept()s a connection, the socket ID is written to the
+** final argument.
 */
-int http_server(const char *zPort, int localOnly){
+int http_server(const char *zPort, int localOnly, int * httpConnection){
   int listener[20];            /* The server sockets */
   int connection;              /* A socket for each individual connection */
   fd_set readfds;              /* Set of file descriptors for select() */
@@ -2962,6 +2866,7 @@ int http_server(const char *zPort, int localOnly){
             fd = dup(connection);
             if( fd!=1 ) nErr++;
             close(connection);
+            *httpConnection = fd;
             return nErr;
           }
         }
@@ -2983,6 +2888,7 @@ int main(int argc, const char **argv){
   const char *zPort = 0;    /* Implement an HTTP server process */
   int useChrootJail = 1;    /* True to use a change-root jail */
   struct passwd *pwd = 0;   /* Information about the user */
+  int httpConnection = 0;   /* Socket ID of inbound http connection */
 
   /* Record the time when processing begins.
   */
@@ -3128,7 +3034,7 @@ int main(int argc, const char **argv){
   }
 
   /* Activate the server, if requested */
-  if( zPort && http_server(zPort, 0) ){
+  if( zPort && http_server(zPort, 0, &httpConnection) ){
     Malfunction(550, /* LOG: server startup failed */
                 "failed to start server");
   }
@@ -3187,10 +3093,10 @@ int main(int argc, const char **argv){
   /* Process the input stream */
   if(useHttps!=2){
     for(i=0; i<100; i++){
-      ProcessOneRequest(0);
+      ProcessOneRequest(0, httpConnection);
     }
   }
-  ProcessOneRequest(1);
+  ProcessOneRequest(1, httpConnection);
   exit(0);
 }
 
