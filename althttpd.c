@@ -1809,7 +1809,9 @@ static int SendFile(
 }
 
 /*
-** Streams all contents from in to out.
+** Streams all contents from in to out. If in TLS mode, the
+** output stream is ignored and the output instead goes
+** to the TLS channel.
 */
 static void stream_file(FILE * const in, FILE * const out){
   enum { STREAMBUF_SIZE = 1024 * 4 };
