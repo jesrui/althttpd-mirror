@@ -348,21 +348,6 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 static void Malfunction(int errNo, const char *zFormat, ...);
 
-#if 0
-/* Only for debugging */
-void my_debug(char const * fmt,...){
-  va_list va;
-  va_start(va, fmt);
-  vfprintf(stderr, fmt, va);
-  va_end(va);
-}
-#define MARKER(pfexp)                                               \
-  do{ my_debug("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
-    my_debug pfexp;                                                   \
-  } while(0)
-#else
-#define MARKER(pfexp) (void)0
-#endif
 #ifdef ENABLE_TLS
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
@@ -451,12 +436,10 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
-    if(1){
-      MARKER(("SSL_write() of %d bytes failed: SSL code #%d, "
-              "errno=%d %s\n%.*s\n", nBuf,
-              SSL_get_error(pServer->ssl, n), errno, strerror(errno),
-              (int)nBuf, (char*)zBuf));
-    }
+    /* Do NOT call Malfunction() from here, as Malfunction()
+    ** may output via this function. The current error handling
+    ** is somewhat unsatisfactory, as it can lead to negative
+    ** response length sizes in the althttpd log. */
     return -SSL_get_error(pServer->ssl, n);
   }else{
     return n;
@@ -1928,13 +1911,9 @@ static void CgiHandleReply(FILE *in, int isNPH){
       aRes[nRes++] = c;
     }
     if( nRes ){
-      /*MARKER(("Read back CGI response (%d bytes):\n%.*s\n",
-        (int)nRes, (int)nRes, aRes));*/
       aRes[nRes] = 0;
       nOut += althttpd_printf("Content-length: %d\r\n\r\n", (int)nRes);
-      /*MARKER(("nOut=%d\n", (int)nOut));*/
       nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
-      /*MARKER(("nOut=%d\n", (int)nOut));*/
     }else{
       nOut += althttpd_printf("Content-length: 0\r\n\r\n");
     }
@@ -2445,7 +2424,6 @@ void ProcessOneRequest(int forceClose, int socketId){
     n = althttpd_fread(zBuf,1,len,stdin);
     nIn += n;
     fwrite(zBuf,1,n,out);
-    /*MARKER(("Wrote POST contents:\n%.*s\n", (int)n, zBuf));*/
     free(zBuf);
     fclose(out);
   }
@@ -2671,11 +2649,10 @@ void ProcessOneRequest(int forceClose, int socketId){
                     "Unable to duplicate file descriptor 0");
       }
       close(0);
-      /*MARKER(("Opened tmpfile %s as CGI stdin\n", zTmpNam));*/
     }
-
     if(zTmpNam){
-      in = fopen(zTmpNam, "r");
+      /* Becomes the stdin of our upcoming CGI process. */
+      open(zTmpNam, O_RDONLY);
     }
 
     /* Fall thru to here for the NPH (non-parsed-headers) case and if
@@ -2701,7 +2678,6 @@ void ProcessOneRequest(int forceClose, int socketId){
         }
         close(px[1]);
         for(i=3; close(i)==0; i++){}
-        /*MARKER(("exec'ding %s\n", zBaseFilename));*/
         execl(zBaseFilename, zBaseFilename, (char*)0);
         exit(0);
       }
