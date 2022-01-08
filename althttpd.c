@@ -2130,7 +2130,6 @@ void ProcessOneRequest(int forceClose, int socketId){
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
   FILE *in;                 /* For reading from CGI scripts */
-  FILE *cgiStdin = NULL;    /* pseudo-stdin to pipe to CGI scripts */
 #ifdef LOG_HEADER
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
@@ -2672,7 +2671,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       /* NOTE: No log entry written for nph- scripts */
       exit(0);
     }else if(zTmpNam){
-      cgiStdin = fopen(zTmpNam, "r");
+      in = fopen(zTmpNam, "r");
     }
 
     /* Fall thru to here only if this process (the server) is going
