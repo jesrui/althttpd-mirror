@@ -1832,6 +1832,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     ** in order to go through the TLS output channel.
     */
     stream_file(in, stdout);
+    fclose(in);
     return;
   }
 
