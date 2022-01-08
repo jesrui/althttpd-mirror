@@ -1696,6 +1696,16 @@ static size_t althttpd_fwrite(void const *src, size_t sz, size_t nmemb, FILE *ou
 }
 
 /*
+** In non-builtin-TLS mode, fflush()ed the given FILE handle, else
+** this is a no-op.
+*/
+static void althttpd_fflush(FILE *f){
+  if( useHttps!=2 ){
+    fflush(f);
+  }
+}
+
+/*
 ** Transfer nXfer bytes from in to out, after first discarding
 ** nSkip bytes from in.  Increment the nOut global variable
 ** according to the number of bytes transferred.
@@ -1796,6 +1806,106 @@ static int SendFile(
   fclose(in);
   return 0;
 }
+
+/*
+** Streams all contents from in to out.
+*/
+static void stream_file(FILE *in, FILE *out){
+  enum { STREAMBUF_SIZE = 1024 * 4 };
+  char streamBuf[STREAMBUF_SIZE];
+  size_t n;
+  while( (n = fread(streamBuf, 1,sizeof(STREAMBUF_SIZE),in)) ){
+    fwrite(streamBuf, 1, n, out);
+  }
+}
+
+
+#if 1
+#define ENABLE_POPEN2
+#endif
+#ifdef ENABLE_POPEN2
+/*
+** Create a child process running shell command "zCmd".  *ppOut is
+** a FILE that becomes the standard input of the child process.
+** (The caller writes to *ppOut in order to send text to the child.)
+** *ppIn is stdout from the child process.  (The caller
+** reads from *ppIn in order to receive input from the child.)
+** Note that *ppIn is an unbuffered file descriptor, not a FILE.
+** The process ID of the child is written into *pChildPid.
+**
+** Return the number of errors.
+*/
+static int popen2(
+  const char *zCmd,      /* Command to run in the child process */
+  int *pfdIn,            /* Read from child using this file descriptor */
+  FILE **ppOut,          /* Write to child using this file descriptor */
+  int *pChildPid,        /* PID of the child process */
+  int bDirect            /* 0: run zCmd as a shell cmd.  1: run directly */
+){
+  int pin[2], pout[2];
+  *pfdIn = 0;
+  *ppOut = 0;
+  *pChildPid = 0;
+
+  if( pipe(pin)<0 ){
+    return 1;
+  }
+  if( pipe(pout)<0 ){
+    close(pin[0]);
+    close(pin[1]);
+    return 1;
+  }
+  *pChildPid = fork();
+  if( *pChildPid<0 ){
+    close(pin[0]);
+    close(pin[1]);
+    close(pout[0]);
+    close(pout[1]);
+    *pChildPid = 0;
+    return 1;
+  }
+  signal(SIGPIPE,SIG_IGN);
+  if( *pChildPid==0 ){
+    int fd;
+    int nErr = 0;
+    /* This is the child process */
+    close(0);
+    fd = dup(pout[0]);
+    if( fd!=0 ) nErr++;
+    close(pout[0]);
+    close(pout[1]);
+    close(1);
+    fd = dup(pin[1]);
+    if( fd!=1 ) nErr++;
+    close(pin[0]);
+    close(pin[1]);
+    if( bDirect ){
+      execl(zCmd, zCmd, (char*)0);
+    }else{
+      execl("/bin/sh", "/bin/sh", "-c", zCmd, (char*)0);
+    }
+    return 1;
+  }else{
+    /* This is the parent process */
+    close(pin[1]);
+    *pfdIn = pin[0];
+    close(pout[0]);
+    *ppOut = fdopen(pout[1], "w");
+    return 0;
+  }
+}
+
+/*
+** Close the connection to a child process previously created using
+** popen2().
+*/
+static void pclose2(int fdIn, FILE *pOut, int childPid){
+  close(fdIn);
+  fclose(pOut);
+  while( waitpid(0, 0, WNOHANG)>0 ) {}
+  if(childPid){/*unused*/}
+}
+#endif /*ENABLE_POPEN2*/
 
 /*
 ** A CGI or SCGI script has run and is sending its reply back across
@@ -2047,10 +2157,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   if( zMethod[0]=='P'
    && atoi(zContentLength)>0 
    && (in = fopen(zTmpNam,"r"))!=0 ){
-    size_t n;
-    while( (n = fread(zLine,1,sizeof(zLine),in))>0 ){
-      fwrite(zLine, 1, n, s);
-    }
+    stream_file(in, s);
     fclose(in);
   }
   fflush(s);
@@ -2067,15 +2174,18 @@ static int tls_init_conn(int iSocket){
     assert(NULL==tlsState.sslCon);
     if(NULL==tlsState.sslCon){
       tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
+      if(NULL==tlsState.sslCon){
+        Malfunction(500,"Could not instantiate TLS context.");
+      }
       atexit(tls_atexit);
     }
     return 1;
   }
-#endif
+#else
   if(0==iSocket){/*unused arg*/}
+#endif
   return 0;
 }
-#if 0
 static void tls_close_conn(void){
 #ifdef ENABLE_TLS
   if(tlsState.sslCon){
@@ -2084,7 +2194,6 @@ static void tls_close_conn(void){
   }
 #endif
 }
-#endif
 
 /*
 ** This routine processes a single HTTP request on standard input and
@@ -2104,6 +2213,7 @@ void ProcessOneRequest(int forceClose){
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
   FILE *in;                 /* For reading from CGI scripts */
+  FILE *cgiStdin = NULL;    /* pseudo-stdin to pipe to CGI scripts */
 #ifdef LOG_HEADER
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
@@ -2620,21 +2730,24 @@ void ProcessOneRequest(int forceClose){
     if( zMethod[0]=='P' ){
       if( dup(0)<0 ){
         Malfunction(430,  /* LOG: dup(0) failed */
-                    "Unable to duplication file descriptor 0");
+                    "Unable to duplicate file descriptor 0");
       }
       close(0);
-      open(zTmpNam, O_RDONLY);
       /*MARKER(("Opened tmpfile %s as CGI stdin\n", zTmpNam));*/
     }
 
     if( strncmp(zBaseFilename,"nph-",4)==0 ){
+      if(zTmpNam) open(zTmpNam, O_RDONLY);
       /* If the name of the CGI script begins with "nph-" then we are
       ** dealing with a "non-parsed headers" CGI script.  Just exec()
       ** it directly and let it handle all its own header generation.
       */
+      /* UNTESTED WITH ENABLE_TLS! */
       execl(zBaseFilename,zBaseFilename,(char*)0);
       /* NOTE: No log entry written for nph- scripts */
       exit(0);
+    }else if(zTmpNam){
+      cgiStdin = fopen(zTmpNam, "r");
     }
 
     /* Fall thru to here only if this process (the server) is going
@@ -2643,6 +2756,29 @@ void ProcessOneRequest(int forceClose){
     ** fork the CGI process.  Once everything is done, we should be
     ** able to read the output of CGI on the "in" stream.
     */
+#ifdef ENABLE_POPEN2
+    {
+      int fdFromChild = -1;
+      FILE * toChild = NULL;
+      int childPid = -1;
+      int rc = popen2(zBaseFilename, &fdFromChild, &toChild, &childPid, 1);
+      if(rc){
+        Malfunction(500,"CGI popen() failed.");
+      }
+      if(cgiStdin){
+        stream_file(cgiStdin, toChild);
+        fclose(cgiStdin);
+        cgiStdin = NULL;
+      }      
+      in = fdopen(fdFromChild, "rb");
+      if( in==0 ){
+        CgiError();
+      }else{
+        CgiHandleReply(in);
+      }
+      pclose2(fdFromChild, toChild, childPid);
+    }
+#else
     {
       int px[2];
       if( pipe(px) ){
@@ -2671,6 +2807,7 @@ void ProcessOneRequest(int forceClose){
     }else{
       CgiHandleReply(in);
     }
+#endif /* !ENABLE_POPEN2 */
   }else if( lenFile>5 && strcmp(&zFile[lenFile-5],".scgi")==0 ){
     /* Any file that ends with ".scgi" is assumed to be text of the
     ** form:
@@ -2686,9 +2823,13 @@ void ProcessOneRequest(int forceClose){
     /* If it isn't executable then it
     ** must a simple file that needs to be copied to output.
     */
-    if( SendFile(zFile, lenFile, &statbuf) ) return;
+    if( SendFile(zFile, lenFile, &statbuf) ){
+      tls_close_conn();
+      return;
+    }
   }
-  fflush(stdout);
+  tls_close_conn();
+  althttpd_fflush(stdout);
   MakeLogEntry(0, 0);  /* LOG: Normal reply */
 
   /* The next request must arrive within 30 seconds or we close the connection
