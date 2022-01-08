@@ -1811,12 +1811,12 @@ static int SendFile(
 /*
 ** Streams all contents from in to out.
 */
-static void stream_file(FILE *in, FILE *out){
+static void stream_file(FILE * const in, FILE * const out){
   enum { STREAMBUF_SIZE = 1024 * 4 };
   char streamBuf[STREAMBUF_SIZE];
   size_t n;
   while( (n = fread(streamBuf, 1,sizeof(STREAMBUF_SIZE),in)) ){
-    fwrite(streamBuf, 1, n, out);
+    althttpd_fwrite(streamBuf, 1, n, out);
   }
 }
 
@@ -1824,8 +1824,12 @@ static void stream_file(FILE *in, FILE *out){
 ** A CGI or SCGI script has run and is sending its reply back across
 ** the channel "in".  Process this reply into an appropriate HTTP reply.
 ** Close the "in" channel when done.
+**
+** If isNPH is true, the input is assumed to be from a
+** non-parsed-header CGI and is passed on as-is to stdout or the TLS
+** layer, depending on the connection state.
 */
-static void CgiHandleReply(FILE *in){
+static void CgiHandleReply(FILE *in, int isNPH){
   int seenContentLength = 0;   /* True if Content-length: header seen */
   int contentLength = 0;       /* The content length */
   size_t nRes = 0;             /* Bytes of payload */
@@ -1842,6 +1846,17 @@ static void CgiHandleReply(FILE *in){
     ** to help prevent a run-away CGI */
     alarm(0);
   }
+
+  if(isNPH){
+    /*
+    ** Non-parsed-header output: simply pipe it out as-is. We
+    ** need to go through this routine, instead of simply exec()'ing,
+    ** in order to go through the TLS output channel.
+    */
+    stream_file(in, stdout);
+    return;
+  }
+
   while( fgets(zLine,sizeof(zLine),in) && !isspace((unsigned char)zLine[0]) ){
     if( strncasecmp(zLine,"Location:",9)==0 ){
       StartResponse("302 Redirect");
@@ -2074,7 +2089,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
     fclose(in);
   }
   fflush(s);
-  CgiHandleReply(s);
+  CgiHandleReply(s, 0);
 }
 
 /*
@@ -2657,28 +2672,16 @@ void ProcessOneRequest(int forceClose, int socketId){
       /*MARKER(("Opened tmpfile %s as CGI stdin\n", zTmpNam));*/
     }
 
-    if( strncmp(zBaseFilename,"nph-",4)==0 ){
-      if(zTmpNam) open(zTmpNam, O_RDONLY);
-      /* If the name of the CGI script begins with "nph-" then we are
-      ** dealing with a "non-parsed headers" CGI script.  Just exec()
-      ** it directly and let it handle all its own header generation.
-      */
-      /* FAILS WITH TLS for unknown reasons:
-      **
-      ** Error code: SSL_ERROR_RX_RECORD_TOO_LONG
-      */
-      execl(zBaseFilename,zBaseFilename,(char*)0);
-      /* NOTE: No log entry written for nph- scripts */
-      exit(0);
-    }else if(zTmpNam){
+    if(zTmpNam){
       in = fopen(zTmpNam, "r");
     }
 
-    /* Fall thru to here only if this process (the server) is going
-    ** to read and augment the header sent back by the CGI process.
-    ** Open a pipe to receive the output from the CGI process.  Then
-    ** fork the CGI process.  Once everything is done, we should be
-    ** able to read the output of CGI on the "in" stream.
+    /* Fall thru to here for the NPH (non-parsed-headers) case and if
+    ** this process (the server) is going to read and augment the
+    ** header sent back by the CGI process. Open a pipe to receive
+    ** the output from the CGI process. Then fork the CGI process.
+    ** Once everything is done, we should be able to read the output
+    ** of CGI on the "in" stream.
     */
     {
       int px[2];
@@ -2706,7 +2709,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     if( in==0 ){
       CgiError();
     }else{
-      CgiHandleReply(in);
+      CgiHandleReply(in, strncmp(zBaseFilename,"nph-",4)==0);
     }
   }else if( lenFile>5 && strcmp(&zFile[lenFile-5],".scgi")==0 ){
     /* Any file that ends with ".scgi" is assumed to be text of the
