@@ -369,21 +369,11 @@ static struct TlsState {
   SSL_CTX *ctx;
   const char * zCertFile; /* -tls-cert-file CLI arg */
   TlsServerConn * sslCon;
-#if 0 /* the following are pending potential porting from fossil */
-  BIO *iBio;        /* OpenSSL I/O abstraction */
-  char *errMsg;  /* Text of most recent OpenSSL error */
-  SSL *ssl;
-#endif
 } tlsState = {
   0/*isInit*/,
   NULL/*SSL_CTX *ctx*/,
   NULL/*zCertFile*/,
-  NULL/*sslCon*/,
-#if 0
-  NULL/*iBio*/,
-  NULL/*errMsg*/,
-  NULL/*ssl*/
-#endif
+  NULL/*sslCon*/
 };
 /*
 ** Read a single line of text from the client and stores it in zBuf
@@ -402,6 +392,7 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
   for(i=0; i<nBuf-1; i++){
     n = SSL_read(pServer->ssl, &zBuf[i], 1);
     if( n<=0 ){
+      pServer->atEof = 1;
       return 0;
     }
     if( zBuf[i]=='\n' ) break;
@@ -410,8 +401,10 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
   return zBuf;
 }
 /*
-** Read cleartext bytes that have been received from the client and
-** decrypted by the SSL server codec.
+** Reads up tp nBuf bytes of TLS-decoded bytes from the client and
+** stores them in zBuf, which must be least nBuf bytes long.  Returns
+** the number of bytes read. Fails fatally if nBuf is "too big". Once
+** pServerArg reaches EOF, this function simply returns 0.
 */
 static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   int n;
@@ -450,7 +443,7 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
 /*
 ** A printf() proxy which outputs either to stdout or the outbound TLS
 ** connection, depending on connection state. It uses a
-** statically-sized buffer for TLS outut and will fail (via
+** statically-sized buffer for TLS output and will fail (via
 ** Malfunction()) if it's passed too much data. In non-TLS mode it has
 ** no such limitation. The buffer is generously sized, in any case, to
 ** be able to handle all of the headers output by althttpd as of the
