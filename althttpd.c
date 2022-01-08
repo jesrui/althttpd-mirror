@@ -1673,7 +1673,7 @@ static size_t althttpd_fwrite(void const *src, size_t sz, size_t nmemb, FILE *ou
 }
 
 /*
-** In non-builtin-TLS mode, fflush()ed the given FILE handle, else
+** In non-builtin-TLS mode, fflush()es the given FILE handle, else
 ** this is a no-op.
 */
 static void althttpd_fflush(FILE *f){

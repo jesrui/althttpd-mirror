@@ -48,8 +48,9 @@ For serving TLS connections there are two options:
 1. althttpd can be built with the `ENABLE_TLS` macro defined and linked to
 `-lssl -lcrypto`, then started with the `-tls 1` or `-tls-cert-file` flags.
 
-2. althttpd can be started with the `-https 1` flag and started via an
-external connection service such as stunnel4.
+2. althttpd can be started via an external connection service such as
+stunnel4, passing the `-https 1` flag to althttpd to tell it that it is
+"indirectly" operating in HTTPS mode via that service.
 
 
 Source Code

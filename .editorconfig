@@ -1,7 +1,5 @@
-# EditorConfig (https://editorconfig.com) Configuration for Fossil
-# and, by extension, libfossil.
-#
-# Following https://fossil-scm.org/fossil/doc/trunk/www/style.wiki
+# EditorConfig (https://editorconfig.com) configuration suitable for
+# "drh projects": fossil, althttpd, and their kin.
 
 # Defaults for all files
 [*]
