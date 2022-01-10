@@ -1168,8 +1168,8 @@ static void ssl_init_server(const char *zCertFile,
       Malfunction(500,"Error initializing the SSL server");
     }
     if( zCertFile && zCertFile[0] ){
-      if( SSL_CTX_use_certificate_file(tlsState.ctx,zCertFile,
-                                       SSL_FILETYPE_PEM)<=0 ){
+      if( SSL_CTX_use_certificate_chain_file(tlsState.ctx,
+                                             zCertFile)!=1 ){
         ERR_print_errors_fp(stderr);
         Malfunction(500,"Error loading CERT file \"%s\"",
                     zCertFile);
