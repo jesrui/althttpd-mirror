@@ -25,7 +25,8 @@ process will handle one or more HTTP requests over the same connection.
 When the connection closes, the althttpd process exits.
 
 Althttpd can also operate stand-alone. Althttpd
-itself listens on port 80 for incoming HTTP requests, then forks
+itself listens on port 80 for incoming HTTP requests (or 443 for
+incoming HTTPS requests), then forks
 a copy of itself to handle each inbound connection.  Each connection
 is still handled using a separate process.  The only difference is
 that the connection-handler process is now started by a master
@@ -36,16 +37,22 @@ using a few command-line arguments. This helps to keep the
 configuration simple and mitigates worries about about introducing
 a security vulnerability through a misconfigured web server.
 
-Althttpd does not itself handle TLS connections.  For HTTPS, althttpd
-relies on stunnel4 to handle TLS protocol negotiation, decryption, and
-encryption.
-
 Because each althttpd process only needs to service a single
 connection, althttpd is single threaded.  Furthermore, each process
 only lives for the duration of a single connection, which means that
 althttpd does not need to worry too much about memory leaks.
 These design factors help keep the althttpd source code simple,
 which facilitates security auditing and analysis.
+
+For serving TLS connections there are two options:
+
+1. althttpd can be built with the `ENABLE_TLS` macro defined and linked to
+`-lssl -lcrypto`, then started with the `--cert fullchain.pem` and
+`--pkey privkey.pem` flags.
+
+2. althttpd can be started via an external connection service such as
+stunnel4, passing the `-https 1` flag to althttpd to tell it that it is
+"indirectly" operating in HTTPS mode via that service.
 
 
 Source Code
@@ -61,6 +68,13 @@ To build and install althttpd, run the following command:
 
 The althttpd source code is heavily commented and accessible.
 It should be relatively easy to customize for specialized needs.
+
+To build althttpd with built-in TLS support using libssl:
+
+>
+    gcc -Os -o /usr/bin/althttpd -fPIC -DENABLE_SSL -lssl -lcrypto \
+    althttpd.c
+
 
 Setup Using Xinetd
 ------------------
@@ -218,6 +232,34 @@ mode, listening on port 8080.
 The author of althttpd has only ever used stand-alone mode for testing.
 Since althttpd does not itself support TLS encryption, the
 stunnel4 setup is preferred for production websites.
+
+Stand-alone with HTTPS
+----------------------
+
+If althttpd is built with TLS support then it can be told to operate
+in HTTPS mode with one of the following options:
+
+>
+    althttpd -root ~/www --port 8043 -tls 1
+
+this option uses a compiled-in self-signed SSL certificate
+**which is wildly insecure** and is intended for testing purposes.
+only.  Use the --cert option to specify your own PEM-format SSL
+certificate.  The argument to --cert can be the concatenation of
+the SSL private key (often named "privkey.pem") and the certificate
+chain (often named "fullchain.pem").  Alternatively, the --cert
+can point to just the fullchain.pem file and the separate --pkey
+option can point to the privkey.pem file.
+
+Start althttpd with:
+
+>
+    althttpd -root ~/www --port 8043 --cert fullchain.pem --pkey privkey.pem
+
+Note that the certificate is read before althttpd drops root
+privileges, so the certificate may live somewhere inaccessible to
+the non-root user under which the althttpd process will run.
+
 
 Security Features
 -----------------

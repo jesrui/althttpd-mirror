@@ -75,7 +75,7 @@
 **
 **   (10) Content files that end with ".scgi" and that contain text of the
 **        form "SCGI hostname port" will format an SCGI request and send it
-**        to hostname:port, the relay back the reply.  Error behavior is
+**        to hostname:port, then relay back the reply.  Error behavior is
 **        determined by subsequent lines of the .scgi file.  See SCGI below
 **        for details.
 **
@@ -104,9 +104,10 @@
 **                   FILE name is expanded using strftime() if it contains
 **                   at least one '%' and is not too long.
 **
-**  --https          Indicates that input is coming over SSL and is being
-**                   decoded upstream, perhaps by stunnel.  (This program
-**                   only understands plaintext.)
+**  --https BOOLEAN  Indicates that input is coming over SSL and is being
+**                   decoded upstream, perhaps by stunnel. This option
+**                   does *not* activate built-in TLS support.  Use --tls
+**                   for that.
 **
 **  --family ipv4    Only accept input from IPV4 or IPV6, respectively.
 **  --family ipv6    These options are only meaningful if althttpd is run
@@ -121,10 +122,27 @@
 **                   120 seconds.
 **
 **  --max-cpu SEC    Maximum number of seconds of CPU time allowed per
-**                   HTTP connection.  Default 30.  0 means no limit.
+**                   HTTP connection.  Default 30 (build option:
+**                   -DMAX_CPU=integer). 0 means no limit.
 **
 **  --debug          Disables input timeouts.  This is useful for debugging
-**                   when inputs is being typed in manually.
+**                   when inputs are being typed in manually.
+**
+** Additional command-line options available when compiling with ENABLE_TLS:
+**
+**  --cert FILE      The TLS certificate, the "fullchain.pem" file
+**
+**  --pkey FILE      The TLS private key, the "privkey.pem" file.  May be
+**                   omitted if the --cert file is the concatenation of
+**                   the fullchain.pem and the privkey.pem.
+**
+**  --tls BOOLEAN    Activate TLS support if BOOLEAN is true.  This is
+**                   implied if the --cert option is specified.  If this
+**                   option is true and --cert is omitted, then an
+**                   insecure self-signed certificate is used.  Use this
+**                   self-signed cert for testing purposes only, as it is
+**                   wildly insecure.
+**
 **
 ** Command-line options can take either one or two initial "-" characters.
 ** So "--debug" and "-debug" mean the same thing, for example.
@@ -146,7 +164,7 @@
 **
 ** (3)  The length of an HTTP request is limited to MAX_CONTENT_LENGTH bytes
 **      (default: 250 million).  Any HTTP request longer than this fails
-**      with an error.
+**      with an error. (Build option: -DMAX_CONTENT_LENGTH=integer)
 **
 ** (4)  There are hard-coded time-outs on each HTTP request.  If this process
 **      waits longer than the timeout for the complete request, or for CGI
@@ -178,7 +196,7 @@
 ** come from CGI and SCGI.  To check an installation for security, then, it
 ** makes sense to focus on the CGI and SCGI scripts.
 **
-** To local all CGI files:
+** To locate all CGI files:
 **
 **          find *.website -executable -type f -print
 **     OR:  find *.website -perm +0111 -type f -print
@@ -205,20 +223,22 @@
 **      fallback: fallback-filename
 **      relight: relight-command
 **
-** The first line specifies the location and TCP/IP port of the SCGI server
-** that will handle the request.  Subsequent lines determine what to do if
-** the SCGI server cannot be contacted.  If the "relight:" line is present,
-** then the relight-command is run using system() and the connection is
-** retried after a 1-second delay.  Use "&" at the end of the relight-command
-** to run it in the background.  Make sure the relight-command does not
-** send generate output, or that output will become part of the SCGI reply.
-** Add a ">/dev/null" suffix (before the "&") to the relight-command if
-** necessary to suppress output.  If there is no relight-command, or if the
-** relight is attempted but the SCGI server still cannot be contacted, then
-** the content of the fallback-filename file is returned as a substitute for
-** the SCGI request.  The mimetype is determined by the suffix on the
-** fallback-filename.  The fallback-filename would typically be an error
-** message indicating that the service is temporarily unavailable.
+** The first line specifies the location and TCP/IP port of the SCGI
+** server that will handle the request.  Subsequent lines determine
+** what to do if the SCGI server cannot be contacted.  If the
+** "relight:" line is present, then the relight-command is run using
+** system() and the connection is retried after a 1-second delay.  Use
+** "&" at the end of the relight-command to run it in the background.
+** Make sure the relight-command does not generate output, or that
+** output will become part of the SCGI reply.  Add a ">/dev/null"
+** suffix (before the "&") to the relight-command if necessary to
+** suppress output.  If there is no relight-command, or if the relight
+** is attempted but the SCGI server still cannot be contacted, then
+** the content of the fallback-filename file is returned as a
+** substitute for the SCGI request.  The mimetype is determined by the
+** suffix on the fallback-filename.  The fallback-filename would
+** typically be an error message indicating that the service is
+** temporarily unavailable.
 **
 ** Basic Authorization:
 **
@@ -286,7 +306,7 @@
 ** saves having to pass information to subroutines as parameters, and
 ** makes the executable smaller...
 */
-static char *zRoot = 0;          /* Root directory of the website */
+static const char *zRoot = 0;    /* Root directory of the website */
 static char *zTmpNam = 0;        /* Name of a temporary file */
 static char zTmpNamBuf[500];     /* Space to hold the temporary filename */
 static char *zProtocol = 0;      /* The protocol being using by the browser */
@@ -322,13 +342,14 @@ static int nIn = 0;              /* Number of bytes of input */
 static int nOut = 0;             /* Number of bytes of output */
 static char zReplyStatus[4];     /* Reply status code */
 static int statusSent = 0;       /* True after status line is sent */
-static char *zLogFile = 0;       /* Log to this file */
+static const char *zLogFile = 0; /* Log to this file */
 static int debugFlag = 0;        /* True if being debugged */
 static struct timeval beginTime; /* Time when this process starts */
 static int closeConnection = 0;  /* True to send Connection: close in reply */
 static int nRequest = 0;         /* Number of requests processed */
 static int omitLog = 0;          /* Do not make logfile entries if true */
-static int useHttps = 0;         /* True to use HTTPS: instead of HTTP: */
+static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel),
+                                 ** 2=builtin TLS support */
 static char *zHttp = "http";     /* http or https */
 static int useTimeout = 1;       /* True to use times */
 static int standalone = 0;       /* Run as a standalone server (no inetd) */
@@ -343,6 +364,144 @@ static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
+static void Malfunction(int errNo, const char *zFormat, ...);
+
+#ifdef ENABLE_TLS
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+typedef struct TlsServerConn {
+  SSL *ssl;          /* The SSL codec */
+  int atEof;         /* True when EOF reached. */
+  int iSocket;       /* The socket */
+} TlsServerConn;
+
+/*
+** There can only be a single OpenSSL IO connection open at a time.
+** State information about that IO is stored in the following
+** local variables:
+*/
+static struct TlsState {
+  int isInit;             /* 0: uninit 1: init as client 2: init as server */
+  SSL_CTX *ctx;
+  const char *zCertFile;  /* --cert CLI arg */
+  const char *zKeyFile;   /* --pkey CLI arg */
+  TlsServerConn * sslCon;
+} tlsState = {
+  0,                      /* isInit */
+  NULL,                   /* SSL_CTX *ctx */
+  NULL,                   /* zCertFile */
+  NULL,                   /* zKeyFile */
+  NULL                    /* sslCon */
+};
+/*
+** Read a single line of text from the client and stores it in zBuf
+** (which must be at least nBuf bytes long). At EOF it sets
+** tlsState.sslCon->atEof to non-0 and returns 0.  On error is simply
+** returns 0. Once tlsState.sslCon->atEof is non-0, subsequent calls
+** to this function return 0 without reading anything.
+**
+** If it reads anything, it returns zBuf.
+*/
+static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
+  int n = 0;
+  int i;
+  TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
+  if( pServer->atEof ) return 0;
+  for(i=0; i<nBuf-1; i++){
+    n = SSL_read(pServer->ssl, &zBuf[i], 1);
+    if( n<=0 ){
+      pServer->atEof = 1;
+      return 0;
+    }
+    if( zBuf[i]=='\n' ) break;
+  }
+  zBuf[i+1] = 0;
+  return zBuf;
+}
+/*
+** Reads up tp nBuf bytes of TLS-decoded bytes from the client and
+** stores them in zBuf, which must be least nBuf bytes long.  Returns
+** the number of bytes read. Fails fatally if nBuf is "too big". Once
+** pServerArg reaches EOF, this function simply returns 0.
+*/
+static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
+  int n;
+  TlsServerConn *pServer = (TlsServerConn*)pServerArg;
+  if( pServer->atEof ) return 0;
+  if( nBuf>0x7fffffff ){ Malfunction(500,"SSL read too big"); }
+  n = SSL_read(pServer->ssl, zBuf, (int)nBuf);
+  if( n==0 ) pServer->atEof = 1;
+  return n<=0 ? 0 : n;
+}
+
+/*
+** Write cleartext bytes into the SSL server codec so that they can
+** be encrypted and sent back to the client. On success, returns
+** the number of bytes written, else returns a negative value.
+*/
+static int tls_write_server(void *pServerArg, void const *zBuf,  size_t nBuf){
+  int n;
+  TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
+  if( nBuf<=0 ) return 0;
+  if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
+  n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
+  if( n<=0 ){
+    /* Do NOT call Malfunction() from here, as Malfunction()
+    ** may output via this function. The current error handling
+    ** is somewhat unsatisfactory, as it can lead to negative
+    ** response length sizes in the althttpd log. */
+    return -SSL_get_error(pServer->ssl, n);
+  }else{
+    return n;
+  }
+}
+#endif /* ENABLE_TLS */
+
+/*
+** A printf() proxy which outputs either to stdout or the outbound TLS
+** connection, depending on connection state. It uses a
+** statically-sized buffer for TLS output and will fail (via
+** Malfunction()) if it's passed too much data. In non-TLS mode it has
+** no such limitation. The buffer is generously sized, in any case, to
+** be able to handle all of the headers output by althttpd as of the
+** time of this writing.
+*/
+#ifdef ENABLE_TLS
+static int althttpd_vprintf(char const * fmt, va_list va){
+  if( useHttps!=2 || NULL==tlsState.sslCon ){
+    return vprintf(fmt, va);
+  }else{
+    enum { PF_BUFFER_SIZE = 1024 * 2 };
+    static char pfBuffer[PF_BUFFER_SIZE] = {0};
+    const int sz = vsnprintf(pfBuffer, PF_BUFFER_SIZE, fmt, va);
+    if( sz<PF_BUFFER_SIZE ){
+      return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
+    }else{
+      Malfunction(500,"Output buffer is too small. Wanted %d bytes.",
+                  sz);
+      return 0;
+    }
+  }
+}
+#else
+#define althttpd_vprintf vprintf
+#endif
+
+#ifdef ENABLE_TLS
+static int althttpd_printf(char const * fmt, ...){
+  int rc;
+  va_list va;
+  va_start(va,fmt);
+  rc = althttpd_vprintf(fmt, va);
+  va_end(va);
+  return rc;
+}
+#else
+#define althttpd_printf printf
+#endif
+
 /*
 ** Mapping between CGI variable names and values stored in
 ** global variables.
@@ -351,46 +510,47 @@ static struct {
   char *zEnvName;
   char **pzEnvValue;
 } cgienv[] = {
-  { "CONTENT_LENGTH",          &zContentLength }, /* Must be first for SCGI */
-  { "AUTH_TYPE",                   &zAuthType },
-  { "AUTH_CONTENT",                &zAuthArg },
-  { "CONTENT_TYPE",                &zContentType },
-  { "DOCUMENT_ROOT",               &zHome },
-  { "HTTP_ACCEPT",                 &zAccept },
-  { "HTTP_ACCEPT_ENCODING",        &zAcceptEncoding },
-  { "HTTP_COOKIE",                 &zCookie },
-  { "HTTP_HOST",                   &zHttpHost },
-  { "HTTP_IF_MODIFIED_SINCE",      &zIfModifiedSince },
-  { "HTTP_IF_NONE_MATCH",          &zIfNoneMatch },
-  { "HTTP_REFERER",                &zReferer },
-  { "HTTP_USER_AGENT",             &zAgent },
-  { "PATH",                        &default_path },
-  { "PATH_INFO",                   &zPathInfo },
-  { "QUERY_STRING",                &zQueryString },
-  { "REMOTE_ADDR",                 &zRemoteAddr },
-  { "REQUEST_METHOD",              &zMethod },
-  { "REQUEST_URI",                 &zScript },
-  { "REMOTE_USER",                 &zRemoteUser },
-  { "SCGI",                        &zScgi },
-  { "SCRIPT_DIRECTORY",            &zDir },
-  { "SCRIPT_FILENAME",             &zFile },
-  { "SCRIPT_NAME",                 &zRealScript },
-  { "SERVER_NAME",                 &zServerName },
-  { "SERVER_PORT",                 &zServerPort },
-  { "SERVER_PROTOCOL",             &zProtocol },
+  { "CONTENT_LENGTH",           &zContentLength }, /* Must be first for SCGI */
+  { "AUTH_TYPE",                &zAuthType },
+  { "AUTH_CONTENT",             &zAuthArg },
+  { "CONTENT_TYPE",             &zContentType },
+  { "DOCUMENT_ROOT",            &zHome },
+  { "HTTP_ACCEPT",              &zAccept },
+  { "HTTP_ACCEPT_ENCODING",     &zAcceptEncoding },
+  { "HTTP_COOKIE",              &zCookie },
+  { "HTTP_HOST",                &zHttpHost },
+  { "HTTP_IF_MODIFIED_SINCE",   &zIfModifiedSince },
+  { "HTTP_IF_NONE_MATCH",       &zIfNoneMatch },
+  { "HTTP_REFERER",             &zReferer },
+  { "HTTP_USER_AGENT",          &zAgent },
+  { "PATH",                     &default_path },
+  { "PATH_INFO",                &zPathInfo },
+  { "QUERY_STRING",             &zQueryString },
+  { "REMOTE_ADDR",              &zRemoteAddr },
+  { "REQUEST_METHOD",           &zMethod },
+  { "REQUEST_URI",              &zScript },
+  { "REMOTE_USER",              &zRemoteUser },
+  { "SCGI",                     &zScgi },
+  { "SCRIPT_DIRECTORY",         &zDir },
+  { "SCRIPT_FILENAME",          &zFile },
+  { "SCRIPT_NAME",              &zRealScript },
+  { "SERVER_NAME",              &zServerName },
+  { "SERVER_PORT",              &zServerPort },
+  { "SERVER_PROTOCOL",          &zProtocol },
 };
 
 
 /*
-** Double any double-quote characters in a string.
+** Double any double-quote characters in a string.  This is used to
+** quote strings for output into the CSV log file.
 */
-static char *Escape(char *z){
+static char *Escape(const char *z){
   size_t i, j;
   size_t n;
   char c;
   char *zOut;
   for(i=0; (c=z[i])!=0 && c!='"'; i++){}
-  if( c==0 ) return z;
+  if( c==0 ) return (char *)z;
   n = 1;
   for(i++; (c=z[i])!=0; i++){ if( c=='"' ) n++; }
   zOut = malloc( i+n+1 );
@@ -424,8 +584,8 @@ static void MakeLogEntry(int exitCode, int lineNum){
     struct tm *pTm;
     struct rusage self, children;
     int waitStatus;
-    char *zRM = zRemoteUser ? zRemoteUser : "";
-    char *zFilename;
+    const char *zRM = zRemoteUser ? zRemoteUser : "";
+    const char *zFilename;
     size_t sz;
     char zDate[200];
     char zExpLogFile[500];
@@ -617,7 +777,7 @@ static char *Rfc822Date(time_t t){
   struct tm *tm;
   static char zDate[100];
   tm = gmtime(&t);
-  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S %Z", tm);
+  strftime(zDate, sizeof(zDate), "%a, %d %b %Y %H:%M:%S GMT", tm);
   return zDate;
 }
 
@@ -626,7 +786,7 @@ static char *Rfc822Date(time_t t){
 ** The date is determined from the unix timestamp given.
 */
 static int DateTag(const char *zTag, time_t t){
-  return printf("%s: %s\r\n", zTag, Rfc822Date(t));
+  return althttpd_printf("%s: %s\r\n", zTag, Rfc822Date(t));
 }
 
 /*
@@ -678,16 +838,16 @@ static void StartResponse(const char *zResultCode){
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += printf("%s %s\r\n", zProtocol, zResultCode);
+  nOut += althttpd_printf("%s %s\r\n", zProtocol, zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
   zReplyStatus[3] = 0;
   if( zReplyStatus[0]>='4' ){
     closeConnection = 1;
   }
   if( closeConnection ){
-    nOut += printf("Connection: close\r\n");
+    nOut += althttpd_printf("Connection: close\r\n");
   }else{
-    nOut += printf("Connection: keep-alive\r\n");
+    nOut += althttpd_printf("Connection: keep-alive\r\n");
   }
   nOut += DateTag("Date", now);
   statusSent = 1;
@@ -698,7 +858,7 @@ static void StartResponse(const char *zResultCode){
 */
 static void NotFound(int lineno){
   StartResponse("404 Not Found");
-  nOut += printf(
+  nOut += althttpd_printf(
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title lineno=\"%d\">Not Found</title></head>\n"
@@ -714,7 +874,7 @@ static void NotFound(int lineno){
 */
 static void Forbidden(int lineno){
   StartResponse("403 Forbidden");
-  nOut += printf(
+  nOut += althttpd_printf(
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Access denied\n"
@@ -730,7 +890,7 @@ static void Forbidden(int lineno){
 */
 static void NotAuthorized(const char *zRealm){
   StartResponse("401 Authorization Required");
-  nOut += printf(
+  nOut += althttpd_printf(
     "WWW-Authenticate: Basic realm=\"%s\"\r\n"
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
@@ -746,7 +906,7 @@ static void NotAuthorized(const char *zRealm){
 */
 static void CgiError(void){
   StartResponse("500 Error");
-  nOut += printf(
+  nOut += althttpd_printf(
     "Content-type: text/html; charset=utf-8\r\n"
     "\r\n"
     "<head><title>CGI Program Error</title></head>\n"
@@ -781,7 +941,7 @@ static void Timeout(int iSig){
 */
 static void CgiScriptWritable(void){
   StartResponse("500 CGI Configuration Error");
-  nOut += printf(
+  nOut += althttpd_printf(
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "The CGI program %s is writable by users other than its owner.\n",
@@ -793,17 +953,17 @@ static void CgiScriptWritable(void){
 /*
 ** Tell the client that the server malfunctioned.
 */
-static void Malfunction(int linenum, const char *zFormat, ...){
+void Malfunction(int linenum, const char *zFormat, ...){
   va_list ap;
   va_start(ap, zFormat);
   StartResponse("500 Server Malfunction");
-  nOut += printf(
+  nOut += althttpd_printf(
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
     "Web server malfunctioned; error number %d\n\n", linenum);
   if( zFormat ){
-    nOut += vprintf(zFormat, ap);
-    printf("\n");
+    nOut += althttpd_vprintf(zFormat, ap);
+    althttpd_printf("\n");
     nOut++;
   }
   va_end(ap);
@@ -829,15 +989,15 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
       break;
   }
   if( zServerPort==0 || zServerPort[0]==0 || strcmp(zServerPort,"80")==0 ){
-    nOut += printf("Location: %s://%s%s%s\r\n",
+    nOut += althttpd_printf("Location: %s://%s%s%s\r\n",
                    zHttp, zServerName, zPath, zQuerySuffix);
   }else{
-    nOut += printf("Location: %s://%s:%s%s%s\r\n",
+    nOut += althttpd_printf("Location: %s://%s:%s%s%s\r\n",
                    zHttp, zServerName, zServerPort, zPath, zQuerySuffix);
   }
   if( finish ){
-    nOut += printf("Content-length: 0\r\n");
-    nOut += printf("\r\n");
+    nOut += althttpd_printf("Content-length: 0\r\n");
+    nOut += althttpd_printf("\r\n");
     MakeLogEntry(0, lineno);
   }
   fflush(stdout);
@@ -848,7 +1008,7 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
 ** decoded value of that string.  Characters of input that are not
 ** valid base-64 characters (such as spaces and newlines) are ignored.
 */
-void Decode64(char *z64){
+static void Decode64(char *z64){
   char *zData;
   int n64;
   int i, j;
@@ -888,6 +1048,177 @@ void Decode64(char *z64){
   }
   zData[j] = 0;
 }
+
+#ifdef ENABLE_TLS
+/* This is a self-signed cert in the PEM format that can be used when
+** no other certs are available.
+**
+** NB: Use of this self-signed cert is wildly insecure.  Use for testing
+** purposes only.
+*/
+static const char sslSelfCert[] = 
+"-----BEGIN CERTIFICATE-----\n"
+"MIIDMTCCAhkCFGrDmuJkkzWERP/ITBvzwwI2lv0TMA0GCSqGSIb3DQEBCwUAMFQx\n"
+"CzAJBgNVBAYTAlVTMQswCQYDVQQIDAJOQzESMBAGA1UEBwwJQ2hhcmxvdHRlMRMw\n"
+"EQYDVQQKDApGb3NzaWwtU0NNMQ8wDQYDVQQDDAZGb3NzaWwwIBcNMjExMjI3MTEz\n"
+"MTU2WhgPMjEyMTEyMjcxMTMxNTZaMFQxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJO\n"
+"QzESMBAGA1UEBwwJQ2hhcmxvdHRlMRMwEQYDVQQKDApGb3NzaWwtU0NNMQ8wDQYD\n"
+"VQQDDAZGb3NzaWwwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCCbTU2\n"
+"6GRQHQqLq7vyZ0OxpAxmgfAKCxt6eIz+jBi2ZM/CB5vVXWVh2+SkSiWEA3UZiUqX\n"
+"xZlzmS/CglZdiwLLDJML8B4OiV72oivFH/vJ7+cbvh1dTxnYiHuww7GfQngPrLfe\n"
+"fiIYPDk1GTUJHBQ7Ue477F7F8vKuHdVgwktF/JDM6M60aSqlo2D/oysirrb+dlur\n"
+"Tlv0rjsYOfq6bLAajoL3qi/vek6DNssoywbge4PfbTgS9g7Gcgncbcet5pvaS12J\n"
+"avhFcd4JU4Ity49Hl9S/C2MfZ1tE53xVggRwKz4FPj65M5uymTdcxtjKXtCxIE1k\n"
+"KxJxXQh7rIYjm+RTAgMBAAEwDQYJKoZIhvcNAQELBQADggEBAFkdtpqcybAzJN8G\n"
+"+ONuUm5sXNbWta7JGvm8l0BTSBcCUtJA3hn16iJqXA9KmLnaF2denC4EYk+KlVU1\n"
+"QXxskPJ4jB8A5B05jMijYv0nzCxKhviI8CR7GLEEGKzeg9pbW0+O3vaVehoZtdFX\n"
+"z3SsCssr9QjCLiApQxMzW1Iv3od2JXeHBwfVMFrWA1VCEUCRs8OSW/VOqDPJLVEi\n"
+"G6wxc4kN9dLK+5S29q3nzl24/qzXoF8P9Re5KBCbrwaHgy+OEEceq5jkmfGFxXjw\n"
+"pvVCNry5uAhH5NqbXZampUWqiWtM4eTaIPo7Y2mDA1uWhuWtO6F9PsnFJlQHCnwy\n"
+"s/TsrXk=\n"
+"-----END CERTIFICATE-----\n";
+
+/* This is the private-key corresponding to the cert above
+*/
+static const char sslSelfPKey[] = 
+"-----BEGIN PRIVATE KEY-----\n"
+"MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCCbTU26GRQHQqL\n"
+"q7vyZ0OxpAxmgfAKCxt6eIz+jBi2ZM/CB5vVXWVh2+SkSiWEA3UZiUqXxZlzmS/C\n"
+"glZdiwLLDJML8B4OiV72oivFH/vJ7+cbvh1dTxnYiHuww7GfQngPrLfefiIYPDk1\n"
+"GTUJHBQ7Ue477F7F8vKuHdVgwktF/JDM6M60aSqlo2D/oysirrb+dlurTlv0rjsY\n"
+"Ofq6bLAajoL3qi/vek6DNssoywbge4PfbTgS9g7Gcgncbcet5pvaS12JavhFcd4J\n"
+"U4Ity49Hl9S/C2MfZ1tE53xVggRwKz4FPj65M5uymTdcxtjKXtCxIE1kKxJxXQh7\n"
+"rIYjm+RTAgMBAAECggEANfTH1vc8yIe7HRzmm9lsf8jF+II4s2705y2H5qY+cvYx\n"
+"nKtZJGOG1X0KkYy7CGoFv5K0cSUl3lS5FVamM/yWIzoIex/Sz2C1EIL2aI5as6ez\n"
+"jB6SN0/J+XI8+Vt7186/rHxfdIPpxuzjHbxX3HTpScETNWcLrghbrPxakbTPPxwt\n"
+"+x7QlPmmkFNuMfvkzToFf9NdwL++44TeBPOpvD/Lrw+eyqdth9RJPq9cM96plh9V\n"
+"HuRqeD8+QNafaXBdSQs3FJK/cDK/vWGKZWIfFVSDbDhwYljkXGijreFjtXQfkkpF\n"
+"rl1J87/H9Ee7z8fTD2YXQHl+0/rghAVtac3u54dpQQKBgQC2XG3OEeMrOp9dNkUd\n"
+"F8VffUg0ecwG+9L3LCe7U71K0kPmXjV6xNnuYcNQu84kptc5vI8wD23p29LaxdNc\n"
+"9m0lcw06/YYBOPkNphcHkINYZTvVJF10mL3isymzMaTtwDkZUkOjL1B+MTiFT/qp\n"
+"ARKrTYGJ4HxY7+tUkI5pUmg4PQKBgQC3GA4d1Rz3Pb/RRpcsZgWknKsKhoN36mSn\n"
+"xFJ3wPBvVv2B1ltTMzh/+the0ty6clzMrvoLERzRcheDsNrc/j/TUVG8sVdBYJwX\n"
+"tMZyFW4NVMOErT/1ukh6jBqIMBo6NJL3EV/AKj0yniksgKOr0/AAduAccnGST8Jd\n"
+"SHOdjwvHzwKBgGZBq/zqgNTDuYseHGE07CMgcDWkumiMGv8ozlq3mSR0hUiPOTPP\n"
+"YFjQjyIdPXnF6FfiyPPtIvgIoNK2LVAqiod+XUPf152l4dnqcW13dn9BvOxGyPTR\n"
+"lWCikFaAFviOWjY9r9m4dU1dslDmySqthFd0TZgPvgps9ivkJ0cdw30NAoGAMC/E\n"
+"h1VvKiK2OP27C5ROJ+STn1GHiCfIFd81VQ8SODtMvL8NifgRBp2eFFaqgOdYRQZI\n"
+"CGGYlAbS6XXCJCdF5Peh62dA75PdgN+y2pOJQzjrvB9cle9Q4++7i9wdCvSLOTr5\n"
+"WDnFoWy+qVexu6crovOmR9ZWzYrwPFy1EOJ010ECgYBl7Q+jmjOSqsVwhFZ0U7LG\n"
+"diN+vXhWfn1wfOWd8u79oaqU/Oy7xyKW2p3H5z2KFrBM/vib53Lh4EwFZjcX+jVG\n"
+"krAmbL+M/hP7z3TD2UbESAzR/c6l7FU45xN84Lsz5npkR8H/uAHuqLgb9e430Mjx\n"
+"YNMwdb8rChHHChNZu6zuxw==\n"
+"-----END PRIVATE KEY-----\n";
+
+/*
+** Read a PEM certificate from memory and push it into an SSL_CTX.
+** Return the number of errors.
+*/
+static int sslctx_use_cert_from_mem(
+  SSL_CTX *ctx,
+  const char *pData,
+  int nData
+){
+  BIO *in;
+  int rc = 1;
+  X509 *x = 0;
+  X509 *cert = 0;
+
+  in = BIO_new_mem_buf(pData, nData);
+  if( in==0 ) goto end_of_ucfm;
+  x = X509_new();
+  if( x==0 ) goto end_of_ucfm;
+  cert = PEM_read_bio_X509(in, &x, 0, 0);
+  if( cert==0 ) goto end_of_ucfm;
+  rc = SSL_CTX_use_certificate(ctx, x)<=0;
+end_of_ucfm:
+  X509_free(x);
+  BIO_free(in);
+  return rc;
+}
+
+/*
+** Read a PEM private key from memory and add it to an SSL_CTX.
+** Return the number of errors.
+*/
+static int sslctx_use_pkey_from_mem(
+  SSL_CTX *ctx,
+  const char *pData,
+  int nData
+){
+  int rc = 1;
+  BIO *in;
+  EVP_PKEY *pkey = 0;
+
+  in = BIO_new_mem_buf(pData, nData);
+  if( in==0 ) goto end_of_upkfm;
+  pkey = PEM_read_bio_PrivateKey(in, 0, 0, 0);
+  if( pkey==0 ) goto end_of_upkfm;
+  rc = SSL_CTX_use_PrivateKey(ctx, pkey)<=0;
+  EVP_PKEY_free(pkey);
+end_of_upkfm:
+  BIO_free(in);
+  return rc;
+}
+
+/*
+** Initialize the SSL library so that it is able to handle
+** server-side connections.  Invokes Malfunction() if there are
+** any problems (so does not return on error).
+**
+** If zKeyFile and zCertFile are not NULL, then they are the names
+** of disk files that hold the certificate and private-key for the
+** server.  If zCertFile is not NULL but zKeyFile is NULL, then
+** zCertFile is assumed to be a concatenation of the certificate and
+** the private-key in the PEM format.
+**
+** If zCertFile is NULL or empty then a built-in self-signed cert is
+** used.
+**
+** Error messages may contain the paths to the given files, but this
+** function is called before the server starts listening for requests,
+** so those will never be sent to clients.
+*/
+static void ssl_init_server(const char *zCertFile,
+                            const char *zKeyFile){
+  if( tlsState.isInit==0 ){
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    tlsState.ctx = SSL_CTX_new(SSLv23_server_method());
+    if( tlsState.ctx==0 ){
+      ERR_print_errors_fp(stderr);
+      Malfunction(500,"Error initializing the SSL server");
+    }
+    if( zCertFile && zCertFile[0] ){
+      if( SSL_CTX_use_certificate_chain_file(tlsState.ctx,
+                                             zCertFile)!=1 ){
+        ERR_print_errors_fp(stderr);
+        Malfunction(500,"Error loading CERT file \"%s\"",
+                    zCertFile);
+      }
+      if( zKeyFile==0 ) zKeyFile = zCertFile;
+      if( SSL_CTX_use_PrivateKey_file(tlsState.ctx, zKeyFile,
+                                      SSL_FILETYPE_PEM)<=0 ){
+        ERR_print_errors_fp(stderr);
+        Malfunction(500,"Error loading PRIVATE KEY from file \"%s\"",
+                    zKeyFile);
+      }
+    }else if( sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
+        || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
+      Malfunction(500,"Error loading self-signed CERT");
+    }
+    if( !SSL_CTX_check_private_key(tlsState.ctx) ){
+      Malfunction(500,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
+           zKeyFile, zCertFile);
+    }
+    SSL_CTX_set_mode(tlsState.ctx, SSL_MODE_AUTO_RETRY);
+    tlsState.isInit = 2;
+  }else{
+    assert( tlsState.isInit==2 );
+  }
+}
+#endif /*ENABLE_TLS*/
 
 /*
 ** Check to see if basic authorization credentials are provided for
@@ -1264,10 +1595,128 @@ static int countSlashes(const char *z){
   return n;
 }
 
+
+#ifdef ENABLE_TLS
+/*
+** Create a new server-side codec.  The argument is the socket's file
+** descriptor from which the codec reads and writes. The returned
+** memory must eventually be passed to tls_close_server().
+*/
+static void *tls_new_server(int iSocket){
+  TlsServerConn *pServer = malloc(sizeof(*pServer));
+  BIO *b = pServer ? BIO_new_socket(iSocket, 0) : NULL;
+  if( NULL==b ){
+    Malfunction(500,"Cannot allocate TlsServerConn.");
+  }
+  assert(NULL!=tlsState.ctx);
+  pServer->ssl = SSL_new(tlsState.ctx);
+  pServer->atEof = 0;
+  pServer->iSocket = iSocket;
+  SSL_set_bio(pServer->ssl, b, b);
+  SSL_accept(pServer->ssl);
+  return (void*)pServer;
+}
+
+/*
+** Close a server-side code previously returned from tls_new_server().
+*/
+static void tls_close_server(void *pServerArg){
+  TlsServerConn *pServer = (TlsServerConn*)pServerArg;
+  SSL_free(pServer->ssl);
+  memset(pServer, 0, sizeof(TlsServerConn));
+  free(pServer);
+}
+
+static void tls_atexit(void){
+  if( tlsState.sslCon ){
+    tls_close_server(tlsState.sslCon);
+    tlsState.sslCon = NULL;
+  }
+}
+#endif /* ENABLE_TLS */
+
+/*
+** Works like fgets():
+**
+** Read a single line of input into s[].  Ensure that s[] is zero-terminated.
+** The s[] buffer is size bytes and so at most size-1 bytes will be read.
+**
+** Return a pointer to s[] on success, or NULL at end-of-input.
+**
+** If in TLS mode, the final argument is ignored and the TLS
+** connection is read instead.
+*/
+static char *althttpd_fgets(char *s, int size, FILE *in){
+  if( useHttps!=2 ){
+    return fgets(s, size, in);
+  }
+#ifdef ENABLE_TLS
+  assert(NULL!=tlsState.sslCon);
+  return tls_gets(tlsState.sslCon, s, size);
+#else
+  Malfunction(500,"SSL not available");
+  return NULL;
+#endif
+}
+/*
+** Works like fread() but may, depending on connection state, use
+** libssl to read the data (in which case the final argument is
+** ignored). The target buffer must be at least (sz*nmemb) bytes.
+*/
+static size_t althttpd_fread(void *tgt, size_t sz, size_t nmemb, FILE *in){
+  if( useHttps!=2 ){
+    return fread(tgt, sz, nmemb, in);
+  }
+#ifdef ENABLE_TLS
+  assert(NULL!=tlsState.sslCon);
+  return tls_read_server(tlsState.sslCon, tgt, sz*nmemb);
+#else
+  Malfunction(500,"SSL not available");
+  return 0;
+#endif
+}
+
+/*
+** Works like fwrite() but may, depending on connection state, write to
+** the active TLS connection (in which case the final argument is
+** ignored).
+** 
+*/
+static size_t althttpd_fwrite(
+  void const *src,          /* Buffer containing content to write */
+  size_t sz,                /* Size of each element in the buffer */
+  size_t nmemb,             /* Number of elements to write */
+  FILE *out                 /* Write on this stream */
+){
+  if( useHttps!=2 ){
+    return fwrite(src, sz, nmemb, out);
+  }
+#ifdef ENABLE_TLS
+  assert(NULL!=tlsState.sslCon);
+  return tls_write_server(tlsState.sslCon, src, sz*nmemb);
+#else
+  Malfunction(500,"SSL not available");
+  return 0;
+#endif
+}
+
+/*
+** In non-builtin-TLS mode, fflush()es the given FILE handle, else
+** this is a no-op.
+*/
+static void althttpd_fflush(FILE *f){
+  if( useHttps!=2 ){
+    fflush(f);
+  }
+}
+
 /*
 ** Transfer nXfer bytes from in to out, after first discarding
 ** nSkip bytes from in.  Increment the nOut global variable
 ** according to the number of bytes transferred.
+**
+** When running in built-in TLS mode the 2nd argument is ignored and
+** output is instead sent via the TLS connection.
 */
 static void xferBytes(FILE *in, FILE *out, int nXfer, int nSkip){
   size_t n;
@@ -1285,7 +1734,7 @@ static void xferBytes(FILE *in, FILE *out, int nXfer, int nSkip){
     if( n>sizeof(zBuf) ) n = sizeof(zBuf);
     got = fread(zBuf, 1, n, in);
     if( got==0 ) break;
-    fwrite(zBuf, got, 1, out);
+    althttpd_fwrite(zBuf, got, 1, out);
     nOut += got;
     nXfer -= got;
   }
@@ -1317,9 +1766,9 @@ static int SendFile(
   ){
     StartResponse("304 Not Modified");
     nOut += DateTag("Last-Modified", pStat->st_mtime);
-    nOut += printf("Cache-Control: max-age=%d\r\n", mxAge);
-    nOut += printf("ETag: \"%s\"\r\n", zETag);
-    nOut += printf("\r\n");
+    nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
+    nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
+    nOut += althttpd_printf("\r\n");
     fflush(stdout);
     MakeLogEntry(0, 470);  /* LOG: ETag Cache Hit */
     return 1;
@@ -1331,7 +1780,7 @@ static int SendFile(
     if( rangeEnd>=pStat->st_size ){
       rangeEnd = pStat->st_size-1;
     }
-    nOut += printf("Content-Range: bytes %d-%d/%d\r\n",
+    nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
                     rangeStart, rangeEnd, (int)pStat->st_size);
     pStat->st_size = rangeEnd + 1 - rangeStart;
   }else{
@@ -1339,10 +1788,10 @@ static int SendFile(
     rangeStart = 0;
   }
   nOut += DateTag("Last-Modified", pStat->st_mtime);
-  nOut += printf("Cache-Control: max-age=%d\r\n", mxAge);
-  nOut += printf("ETag: \"%s\"\r\n", zETag);
-  nOut += printf("Content-type: %s; charset=utf-8\r\n",zContentType);
-  nOut += printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
+  nOut += althttpd_printf("Cache-Control: max-age=%d\r\n", mxAge);
+  nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
+  nOut += althttpd_printf("Content-type: %s; charset=utf-8\r\n",zContentType);
+  nOut += althttpd_printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
   fflush(stdout);
   if( strcmp(zMethod,"HEAD")==0 ){
     MakeLogEntry(0, 2); /* LOG: Normal HEAD reply */
@@ -1350,25 +1799,43 @@ static int SendFile(
     fflush(stdout);
     return 1;
   }
-  if( useTimeout ) alarm(30 + pStat->st_size/1000);
 #ifdef linux
-  {
+  if( 2!=useHttps ){
     off_t offset = rangeStart;
     nOut += sendfile(fileno(stdout), fileno(in), &offset, pStat->st_size);
-  }
-#else
-  xferBytes(in, stdout, (int)pStat->st_size, rangeStart);
+  }else
 #endif
+  {
+    xferBytes(in, stdout, (int)pStat->st_size, rangeStart);
+  }
   fclose(in);
   return 0;
+}
+
+/*
+** Streams all contents from in to out. If in TLS mode, the
+** output stream is ignored and the output instead goes
+** to the TLS channel.
+*/
+static void stream_file(FILE * const in, FILE * const out){
+  enum { STREAMBUF_SIZE = 1024 * 4 };
+  char streamBuf[STREAMBUF_SIZE];
+  size_t n;
+  while( (n = fread(streamBuf, 1,sizeof(STREAMBUF_SIZE),in)) ){
+    althttpd_fwrite(streamBuf, 1, n, out);
+  }
 }
 
 /*
 ** A CGI or SCGI script has run and is sending its reply back across
 ** the channel "in".  Process this reply into an appropriate HTTP reply.
 ** Close the "in" channel when done.
+**
+** If isNPH is true, the input is assumed to be from a
+** non-parsed-header CGI and is passed on as-is to stdout or the TLS
+** layer, depending on the connection state.
 */
-static void CgiHandleReply(FILE *in){
+static void CgiHandleReply(FILE *in, int isNPH){
   int seenContentLength = 0;   /* True if Content-length: header seen */
   int contentLength = 0;       /* The content length */
   size_t nRes = 0;             /* Bytes of payload */
@@ -1385,18 +1852,30 @@ static void CgiHandleReply(FILE *in){
     ** to help prevent a run-away CGI */
     alarm(0);
   }
+
+  if( isNPH ){
+    /*
+    ** Non-parsed-header output: simply pipe it out as-is. We
+    ** need to go through this routine, instead of simply exec()'ing,
+    ** in order to go through the TLS output channel.
+    */
+    stream_file(in, stdout);
+    fclose(in);
+    return;
+  }
+
   while( fgets(zLine,sizeof(zLine),in) && !isspace((unsigned char)zLine[0]) ){
     if( strncasecmp(zLine,"Location:",9)==0 ){
       StartResponse("302 Redirect");
       RemoveNewline(zLine);
       z = &zLine[10];
       while( isspace(*(unsigned char*)z) ){ z++; }
-      nOut += printf("Location: %s\r\n",z);
+      nOut += althttpd_printf("Location: %s\r\n",z);
       rangeEnd = 0;
     }else if( strncasecmp(zLine,"Status:",7)==0 ){
       int i;
       for(i=7; isspace((unsigned char)zLine[i]); i++){}
-      nOut += printf("%s %s", zProtocol, &zLine[i]);
+      nOut += althttpd_printf("%s %s", zProtocol, &zLine[i]);
       strncpy(zReplyStatus, &zLine[i], 3);
       zReplyStatus[3] = 0;
       iStatus = atoi(zReplyStatus);
@@ -1418,7 +1897,6 @@ static void CgiHandleReply(FILE *in){
       nRes += nLine;
     }
   }
-
   /* Copy everything else thru without change or analysis.
   */
   if( rangeEnd>0 && seenContentLength && rangeStart<contentLength ){
@@ -1426,22 +1904,22 @@ static void CgiHandleReply(FILE *in){
     if( rangeEnd>=contentLength ){
       rangeEnd = contentLength-1;
     }
-    nOut += printf("Content-Range: bytes %d-%d/%d\r\n",
-                    rangeStart, rangeEnd, contentLength);
+    nOut += althttpd_printf("Content-Range: bytes %d-%d/%d\r\n",
+                            rangeStart, rangeEnd, contentLength);
     contentLength = rangeEnd + 1 - rangeStart;
   }else{
     StartResponse("200 OK");
   }
   if( nRes>0 ){
     aRes[nRes] = 0;
-    printf("%s", aRes);
+    althttpd_fwrite(aRes, nRes, 1, stdout);
     nOut += nRes;
     nRes = 0;
   }
   if( iStatus==304 ){
-    nOut += printf("\r\n\r\n");
+    nOut += althttpd_printf("\r\n\r\n");
   }else if( seenContentLength ){
-    nOut += printf("Content-length: %d\r\n\r\n", contentLength);
+    nOut += althttpd_printf("Content-length: %d\r\n\r\n", contentLength);
     xferBytes(in, stdout, contentLength, rangeStart);
   }else{
     while( (c = getc(in))!=EOF ){
@@ -1456,9 +1934,10 @@ static void CgiHandleReply(FILE *in){
     }
     if( nRes ){
       aRes[nRes] = 0;
-      nOut += printf("Content-length: %d\r\n\r\n%s", (int)nRes, aRes);
+      nOut += althttpd_printf("Content-length: %d\r\n\r\n", (int)nRes);
+      nOut += althttpd_fwrite(aRes, nRes, 1, stdout);
     }else{
-      nOut += printf("Content-length: 0\r\n\r\n");
+      nOut += althttpd_printf("Content-length: 0\r\n\r\n");
     }
   }
   free(aRes);
@@ -1609,14 +2088,42 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   if( zMethod[0]=='P'
    && atoi(zContentLength)>0 
    && (in = fopen(zTmpNam,"r"))!=0 ){
-    size_t n;
-    while( (n = fread(zLine,1,sizeof(zLine),in))>0 ){
-      fwrite(zLine, 1, n, s);
-    }
+    stream_file(in, s);
     fclose(in);
   }
   fflush(s);
-  CgiHandleReply(s);
+  CgiHandleReply(s, 0);
+}
+
+/*
+** If running in builtin TLS mode, initializes the SSL I/O
+** state and returns 1, else does nothing and returns 0.
+*/
+static int tls_init_conn(int iSocket){
+#ifdef ENABLE_TLS
+  if( 2==useHttps ){
+    /*assert(NULL==tlsState.sslCon);*/
+    if( NULL==tlsState.sslCon ){
+      tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
+      if( NULL==tlsState.sslCon ){
+        Malfunction(500,"Could not instantiate TLS context.");
+      }
+      atexit(tls_atexit);
+    }
+    return 1;
+  }
+#else
+  if( 0==iSocket ){/*unused arg*/}
+#endif
+  return 0;
+}
+static void tls_close_conn(void){
+#ifdef ENABLE_TLS
+  if( tlsState.sslCon ){
+    tls_close_server(tlsState.sslCon);
+    tlsState.sslCon = NULL;
+  }
+#endif
 }
 
 /*
@@ -1631,8 +2138,12 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
 ** If the connection should be closed, this routine calls exit() and
 ** thus never returns.  If this routine does return it means that another
 ** HTTP request may appear on the wire.
+**
+** socketId must be 0 (if running via xinetd/etc) or the socket ID
+** accept()ed by http_server(). It is only used for built-in TLS
+** mode.
 */
-void ProcessOneRequest(int forceClose){
+void ProcessOneRequest(int forceClose, int socketId){
   int i, j, j0;
   char *z;                  /* Used to parse up a string */
   struct stat statbuf;      /* Information about the file to be retrieved */
@@ -1648,10 +2159,13 @@ void ProcessOneRequest(int forceClose){
     char zBuf[1000];
     Malfunction(190,   /* LOG: chdir() failed */
          "cannot chdir to [%s] from [%s]",
-         zRoot, getcwd(zBuf,999));
+         zRoot, getcwd(zBuf,sizeof(zBuf)-1));
   }
   nRequest++;
-
+  if( tls_init_conn(socketId) ){
+    /* Never(?) reuse TLS connections? */
+    forceClose = 1;
+  }
   /*
   ** We must receive a complete header within 15 seconds
   */
@@ -1664,7 +2178,7 @@ void ProcessOneRequest(int forceClose){
   /* Get the first line of the request and parse out the
   ** method, the script and the protocol.
   */
-  if( fgets(zLine,sizeof(zLine),stdin)==0 ){
+  if( althttpd_fgets(zLine,sizeof(zLine),stdin)==0 ){
     exit(0);
   }
   gettimeofday(&beginTime, 0);
@@ -1677,7 +2191,7 @@ void ProcessOneRequest(int forceClose){
   zProtocol = StrDup(GetFirstElement(z,&z));
   if( zProtocol==0 || strncmp(zProtocol,"HTTP/",5)!=0 || strlen(zProtocol)!=8 ){
     StartResponse("400 Bad Request");
-    nOut += printf(
+    nOut += althttpd_printf(
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "This server does not understand the requested protocol\n"
@@ -1702,7 +2216,7 @@ void ProcessOneRequest(int forceClose){
   if( strcmp(zMethod,"GET")!=0 && strcmp(zMethod,"POST")!=0
        && strcmp(zMethod,"HEAD")!=0 ){
     StartResponse("501 Not Implemented");
-    nOut += printf(
+    nOut += althttpd_printf(
       "Content-type: text/plain; charset=utf-8\r\n"
       "\r\n"
       "The %s method is not implemented on this server.\n",
@@ -1738,7 +2252,7 @@ void ProcessOneRequest(int forceClose){
   zIfNoneMatch = 0;
   zIfModifiedSince = 0;
   rangeEnd = 0;
-  while( fgets(zLine,sizeof(zLine),stdin) ){
+  while( althttpd_fgets(zLine,sizeof(zLine),stdin) ){
     char *zFieldName;
     char *zVal;
 
@@ -1901,7 +2415,7 @@ void ProcessOneRequest(int forceClose){
 
     if( len>MAX_CONTENT_LENGTH ){
       StartResponse("500 Request too large");
-      nOut += printf(
+      nOut += althttpd_printf(
         "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Too much POST data\n"
@@ -1919,7 +2433,7 @@ void ProcessOneRequest(int forceClose){
     out = fopen(zTmpNam,"wb");
     if( out==0 ){
       StartResponse("500 Cannot create /tmp file");
-      nOut += printf(
+      nOut += althttpd_printf(
         "Content-type: text/plain; charset=utf-8\r\n"
         "\r\n"
         "Could not open \"%s\" for writing\n", zTmpNam
@@ -1929,7 +2443,7 @@ void ProcessOneRequest(int forceClose){
     }
     zBuf = SafeMalloc( len+1 );
     if( useTimeout ) alarm(15 + len/2000);
-    n = fread(zBuf,1,len,stdin);
+    n = althttpd_fread(zBuf,1,len,stdin);
     nIn += n;
     fwrite(zBuf,1,n,out);
     free(zBuf);
@@ -2010,7 +2524,6 @@ void ProcessOneRequest(int forceClose){
     }
   }
   zHome = StrDup(zLine);
-
   /* Change directories to the root of the HTTP filesystem
   */
   if( chdir(zHome)!=0 ){
@@ -2042,6 +2555,7 @@ void ProcessOneRequest(int forceClose){
             && access(zLine,R_OK)==0 ){
           zRealScript = StrDup(&zLine[j0]);
           Redirect(zRealScript, 302, 1, 370); /* LOG: redirect to not-found */
+          tls_close_conn();
           return;
         }else{
           j--;
@@ -2078,6 +2592,7 @@ void ProcessOneRequest(int forceClose){
         ** none of the relative URLs in the delivered document will be
         ** correct. */
         Redirect(zRealScript,301,1,410); /* LOG: redirect to add trailing / */
+        tls_close_conn();
         return;
       }
       break;
@@ -2100,7 +2615,10 @@ void ProcessOneRequest(int forceClose){
   ** process it.
   */
   sprintf(zLine, "%s/-auth", zDir);
-  if( access(zLine,R_OK)==0 && !CheckBasicAuthorization(zLine) ) return;
+  if( access(zLine,R_OK)==0 && !CheckBasicAuthorization(zLine) ){
+    tls_close_conn();
+    return;
+  }
 
   /* Take appropriate action
   */
@@ -2150,27 +2668,21 @@ void ProcessOneRequest(int forceClose){
     if( zMethod[0]=='P' ){
       if( dup(0)<0 ){
         Malfunction(430,  /* LOG: dup(0) failed */
-                    "Unable to duplication file descriptor 0");
+                    "Unable to duplicate file descriptor 0");
       }
       close(0);
+    }
+    if( zTmpNam ){
+      /* Becomes the stdin of our upcoming CGI process. */
       open(zTmpNam, O_RDONLY);
     }
 
-    if( strncmp(zBaseFilename,"nph-",4)==0 ){
-      /* If the name of the CGI script begins with "nph-" then we are
-      ** dealing with a "non-parsed headers" CGI script.  Just exec()
-      ** it directly and let it handle all its own header generation.
-      */
-      execl(zBaseFilename,zBaseFilename,(char*)0);
-      /* NOTE: No log entry written for nph- scripts */
-      exit(0);
-    }
-
-    /* Fall thru to here only if this process (the server) is going
-    ** to read and augment the header sent back by the CGI process.
-    ** Open a pipe to receive the output from the CGI process.  Then
-    ** fork the CGI process.  Once everything is done, we should be
-    ** able to read the output of CGI on the "in" stream.
+    /* Fall thru to here for the NPH (non-parsed-headers) case and if
+    ** this process (the server) is going to read and augment the
+    ** header sent back by the CGI process. Open a pipe to receive
+    ** the output from the CGI process. Then fork the CGI process.
+    ** Once everything is done, we should be able to read the output
+    ** of CGI on the "in" stream.
     */
     {
       int px[2];
@@ -2197,7 +2709,7 @@ void ProcessOneRequest(int forceClose){
     if( in==0 ){
       CgiError();
     }else{
-      CgiHandleReply(in);
+      CgiHandleReply(in, strncmp(zBaseFilename,"nph-",4)==0);
     }
   }else if( lenFile>5 && strcmp(&zFile[lenFile-5],".scgi")==0 ){
     /* Any file that ends with ".scgi" is assumed to be text of the
@@ -2211,12 +2723,16 @@ void ProcessOneRequest(int forceClose){
     ** actual content file name, report that as a 404 error. */
     NotFound(460); /* LOG: Excess URI content past static file name */
   }else{
-    /* If it isn't executable then it
-    ** must a simple file that needs to be copied to output.
+    /* If it isn't executable then it must be a simple file that needs
+    ** to be copied to output.
     */
-    if( SendFile(zFile, lenFile, &statbuf) ) return;
+    if( SendFile(zFile, lenFile, &statbuf) ){
+      tls_close_conn();
+      return;
+    }
   }
-  fflush(stdout);
+  tls_close_conn();
+  althttpd_fflush(stdout);
   MakeLogEntry(0, 0);  /* LOG: Normal reply */
 
   /* The next request must arrive within 30 seconds or we close the connection
@@ -2247,8 +2763,11 @@ typedef union {
 **
 ** Return 0 to each child as it runs.  If unable to establish a
 ** listening socket, return non-zero.
+**
+** When it accept()s a connection, the socket ID is written to the
+** final argument.
 */
-int http_server(const char *zPort, int localOnly){
+int http_server(const char *zPort, int localOnly, int * httpConnection){
   int listener[20];            /* The server sockets */
   int connection;              /* A socket for each individual connection */
   fd_set readfds;              /* Set of file descriptors for select() */
@@ -2267,10 +2786,10 @@ int http_server(const char *zPort, int localOnly){
   memset(&sHints, 0, sizeof(sHints));
   if( ipv4Only ){
     sHints.ai_family = PF_INET;
-    /*printf("ipv4 only\n");*/
+    /*althttpd_printf("ipv4 only\n");*/
   }else if( ipv6Only ){
     sHints.ai_family = PF_INET6;
-    /*printf("ipv6 only\n");*/
+    /*althttpd_printf("ipv6 only\n");*/
   }else{
     sHints.ai_family = PF_UNSPEC;
   }
@@ -2349,6 +2868,7 @@ int http_server(const char *zPort, int localOnly){
             fd = dup(connection);
             if( fd!=1 ) nErr++;
             close(connection);
+            *httpConnection = fd;
             return nErr;
           }
         }
@@ -2364,13 +2884,13 @@ int http_server(const char *zPort, int localOnly){
   exit(1);
 }
 
-
-int main(int argc, char **argv){
+int main(int argc, const char **argv){
   int i;                    /* Loop counter */
-  char *zPermUser = 0;      /* Run daemon with this user's permissions */
+  const char *zPermUser = 0;/* Run daemon with this user's permissions */
   const char *zPort = 0;    /* Implement an HTTP server process */
   int useChrootJail = 1;    /* True to use a change-root jail */
   struct passwd *pwd = 0;   /* Information about the user */
+  int httpConnection = 0;   /* Socket ID of inbound http connection */
 
   /* Record the time when processing begins.
   */
@@ -2379,8 +2899,8 @@ int main(int argc, char **argv){
   /* Parse command-line arguments
   */
   while( argc>1 && argv[1][0]=='-' ){
-    char *z = argv[1];
-    char *zArg = argc>=3 ? argv[2] : "0";
+    const char *z = argv[1];
+    const char *zArg = argc>=3 ? argv[2] : "0";
     if( z[0]=='-' && z[1]=='-' ) z++;
     if( strcmp(z,"-user")==0 ){
       zPermUser = zArg;
@@ -2393,13 +2913,18 @@ int main(int argc, char **argv){
     }else if( strcmp(z,"-max-cpu")==0 ){
       maxCpu = atoi(zArg);
     }else if( strcmp(z,"-https")==0 ){
-      useHttps = atoi(zArg);
-      zHttp = useHttps ? "https" : "http";
-      if( useHttps ) zRemoteAddr = getenv("REMOTE_HOST");
+      int const x = atoi(zArg);
+      if( x<=0 ){
+        useHttps = 0;
+        zHttp = "http";
+      }else{
+        zHttp = "https";
+        zRemoteAddr = getenv("REMOTE_HOST");
+        useHttps = 1;
+      }
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
-      standalone = 1;
-     
+      standalone = 1 + (useHttps==2);
     }else if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
@@ -2422,7 +2947,29 @@ int main(int argc, char **argv){
         Malfunction(501, /* LOG: cannot open --input file */
                     "cannot open --input file \"%s\"\n", zArg);
       }
-    }else if( strcmp(z, "-datetest")==0 ){
+    }
+#ifdef ENABLE_TLS
+    else if( strcmp(z, "-cert")==0 ){
+      useHttps = 2;
+      zHttp = "https";
+      tlsState.zCertFile = zArg;
+      if( tlsState.zKeyFile==0 ) tlsState.zKeyFile = zArg;
+      if( standalone ){
+        standalone = 2;
+        if( 0==zPort ) zPort = "443";
+      }
+    }else if( strcmp(z, "-pkey")==0 ){
+      tlsState.zKeyFile = zArg;
+    }else if( strcmp(z, "-tls")==0 && atoi(zArg) ){
+      useHttps = 2;
+      zHttp = "https";
+      if( standalone ){
+        standalone = 2;
+        if( 0==zPort ) zPort = "443";
+      }
+    }
+#endif
+    else if( strcmp(z, "-datetest")==0 ){
       TestParseRfc822Date();
       printf("Ok\n");
       exit(0);
@@ -2441,7 +2988,17 @@ int main(int argc, char **argv){
                   "no --root specified");
     }
   }
-  
+
+#if ENABLE_TLS
+  /* We "need" to read the cert before chroot'ing to allow that the
+  ** cert is stored in space outside of the --root and not readable by
+  ** the --user.
+  */
+  if( useHttps>1 ){
+    ssl_init_server(tlsState.zCertFile, tlsState.zKeyFile);
+  }
+#endif
+
   /* Change directories to the root of the HTTP filesystem.  Then
   ** create a chroot jail there.
   */
@@ -2464,7 +3021,7 @@ int main(int argc, char **argv){
   }
 
   /* Activate the server, if requested */
-  if( zPort && http_server(zPort, 0) ){
+  if( zPort && http_server(zPort, 0, &httpConnection) ){
     Malfunction(550, /* LOG: server startup failed */
                 "failed to start server");
   }
@@ -2521,10 +3078,12 @@ int main(int argc, char **argv){
   }
 
   /* Process the input stream */
-  for(i=0; i<100; i++){
-    ProcessOneRequest(0);
+  if( useHttps!=2 ){
+    for(i=0; i<100; i++){
+      ProcessOneRequest(0, httpConnection);
+    }
   }
-  ProcessOneRequest(1);
+  ProcessOneRequest(1, httpConnection);
   exit(0);
 }
 
