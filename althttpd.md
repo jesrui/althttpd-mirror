@@ -25,7 +25,8 @@ process will handle one or more HTTP requests over the same connection.
 When the connection closes, the althttpd process exits.
 
 Althttpd can also operate stand-alone. Althttpd
-itself listens on port 80 for incoming HTTP requests, then forks
+itself listens on port 80 for incoming HTTP requests (or 443 for
+incoming HTTPS requests), then forks
 a copy of itself to handle each inbound connection.  Each connection
 is still handled using a separate process.  The only difference is
 that the connection-handler process is now started by a master
@@ -46,7 +47,8 @@ which facilitates security auditing and analysis.
 For serving TLS connections there are two options:
 
 1. althttpd can be built with the `ENABLE_TLS` macro defined and linked to
-`-lssl -lcrypto`, then started with the `-tls 1` or `-tls-cert-file` flags.
+`-lssl -lcrypto`, then started with the `--cert fullchain.pem` and
+`--pkey privkey.pem` flags.
 
 2. althttpd can be started via an external connection service such as
 stunnel4, passing the `-https 1` flag to althttpd to tell it that it is
@@ -240,23 +242,19 @@ in HTTPS mode with one of the following options:
 >
     althttpd -root ~/www --port 8043 -tls 1
 
-Is equivalent to:
+this option uses a compiled-in self-signed SSL certificate
+**which is wildly insecure** and is intended for testing purposes.
+only.  Use the --cert option to specify your own PEM-format SSL
+certificate.  The argument to --cert can be the concatenation of
+the SSL private key (often named "privkey.pem") and the certificate
+chain (often named "fullchain.pem").  Alternatively, the --cert
+can point to just the fullchain.pem file and the separate --pkey
+option can point to the privkey.pem file.
+
+Start althttpd with:
 
 >
-    althttpd -root ~/www --port 8043 -https 2
-
-Both of those options use a compiled-in self-signed SSL certificate
-***which is only intended for testing purposes***. In order to provide
-your own certificate, you must concatenate a PEM-format SSL private
-key and certificate into a single file:
-
->
-    cat the-key.pem the-cert.pem > my-cert.pem
-
-And then start althttpd with:
-
->
-    althttpd -root ~/www --port 8043 --tls-cert-file my-cert.pem
+    althttpd -root ~/www --port 8043 --cert fullchain.pem --pkey privkey.pem
 
 Note that the certificate is read before althttpd drops root
 privileges, so the certificate may live somewhere inaccessible to
