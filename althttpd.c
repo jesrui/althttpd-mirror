@@ -130,10 +130,19 @@
 **
 ** Additional command-line options available when compiling with ENABLE_TLS:
 **
-**  --tls BOOLEAN            Activate built-in TLS decoding.
+**  --cert FILE      The TLS certificate, the "fullchain.pem" file
 **
-**  --tls-cert-file FILE     FILE contains both the PEM-encoded certificate and
-**                           the private key, concatenated together.
+**  --pkey FILE      The TLS private key, the "privkey.pem" file.  May be
+**                   omitted if the --cert file is the concatenation of
+**                   the fullchain.pem and the privkey.pem.
+**
+**  --tls BOOLEAN    Activate TLS support if BOOLEAN is true.  This is
+**                   implied if the --cert option is specified.  If this
+**                   option is true and --cert is omitted, then an
+**                   insecure self-signed certificate is used.  Use this
+**                   self-signed cert for testing purposes only, as it is
+**                   wildly insecure.
+**
 **
 ** Command-line options can take either one or two initial "-" characters.
 ** So "--debug" and "-debug" mean the same thing, for example.
@@ -376,12 +385,14 @@ typedef struct TlsServerConn {
 static struct TlsState {
   int isInit;             /* 0: uninit 1: init as client 2: init as server */
   SSL_CTX *ctx;
-  const char * zCertFile; /* -tls-cert-file CLI arg */
+  const char *zCertFile;  /* --cert CLI arg */
+  const char *zKeyFile;   /* --pkey CLI arg */
   TlsServerConn * sslCon;
 } tlsState = {
   0,                      /* isInit */
   NULL,                   /* SSL_CTX *ctx */
   NULL,                   /* zCertFile */
+  NULL,                   /* zKeyFile */
   NULL                    /* sslCon */
 };
 /*
@@ -1042,7 +1053,7 @@ static void Decode64(char *z64){
 /* This is a self-signed cert in the PEM format that can be used when
 ** no other certs are available.
 **
-** NB: Use of this self-signed cert is widely insecure.  Use for testing
+** NB: Use of this self-signed cert is wildly insecure.  Use for testing
 ** purposes only.
 */
 static const char sslSelfCert[] = 
@@ -2910,19 +2921,10 @@ int main(int argc, const char **argv){
         zHttp = "https";
         zRemoteAddr = getenv("REMOTE_HOST");
         useHttps = 1;
-        if( 2==x ){
-#if ENABLE_TLS
-          z = "-tls";
-          goto arg_tls;
-#else
-          Malfunction(510,"Built-in TLS support is not available. "
-                      "Use --https 0 or 1.");
-#endif
-        }
       }
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
-      if( 0==standalone ) standalone = 1;
+      standalone = 1 + (useHttps==2);
     }else if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
@@ -2947,26 +2949,23 @@ int main(int argc, const char **argv){
       }
     }
 #ifdef ENABLE_TLS
-    else if( 0==strncmp(z,"-tls",4) ){
-      arg_tls:
-      if( strcmp(z,"-tls")==0 ){
-        useHttps = atoi(zArg)>0 ? 2 : 0;
-        zHttp = useHttps ? "https" : "http";
-        if( useHttps ){
-          standalone = 2;
-          if( 0==zPort ){
-            zPort = "443";
-          }
-        }
-      }else if( strcmp(z, "-tls-cert-file")==0 ){
-        useHttps = 2;
-        zHttp = "https";
-        tlsState.zCertFile = zArg;
-        zRemoteAddr = getenv("REMOTE_HOST")
-          /* This cannot possibly be set at this point in a
-             standalone server, but could be via xinetd. */;
-      }else{
-        goto err_unknown_flag;
+    else if( strcmp(z, "-cert")==0 ){
+      useHttps = 2;
+      zHttp = "https";
+      tlsState.zCertFile = zArg;
+      if( tlsState.zKeyFile==0 ) tlsState.zKeyFile = zArg;
+      if( standalone ){
+        standalone = 2;
+        if( 0==zPort ) zPort = "443";
+      }
+    }else if( strcmp(z, "-pkey")==0 ){
+      tlsState.zKeyFile = zArg;
+    }else if( strcmp(z, "-tls")==0 && atoi(zArg) ){
+      useHttps = 2;
+      zHttp = "https";
+      if( standalone ){
+        standalone = 2;
+        if( 0==zPort ) zPort = "443";
       }
     }
 #endif
@@ -2975,9 +2974,6 @@ int main(int argc, const char **argv){
       printf("Ok\n");
       exit(0);
     }else{
-#ifdef ENABLE_TLS
-    err_unknown_flag:
-#endif
       Malfunction(510, /* LOG: unknown command-line argument on launch */
                   "unknown argument: [%s]\n", z);
     }
@@ -2999,7 +2995,7 @@ int main(int argc, const char **argv){
   ** the --user.
   */
   if( useHttps>1 ){
-    ssl_init_server(tlsState.zCertFile, tlsState.zCertFile);
+    ssl_init_server(tlsState.zCertFile, tlsState.zKeyFile);
   }
 #endif
 
