@@ -105,8 +105,9 @@
 **                   at least one '%' and is not too long.
 **
 **  --https BOOLEAN  Indicates that input is coming over SSL and is being
-**                   decoded upstream, perhaps by stunnel.  (This program
-**                   only understands plaintext.)
+**                   decoded upstream, perhaps by stunnel. This option
+**                   does *not* activate built-in TLS support.  Use --tls
+**                   for that.
 **
 **  --family ipv4    Only accept input from IPV4 or IPV6, respectively.
 **  --family ipv6    These options are only meaningful if althttpd is run
@@ -126,6 +127,13 @@
 **
 **  --debug          Disables input timeouts.  This is useful for debugging
 **                   when inputs are being typed in manually.
+**
+** Additional command-line options available when compiling with ENABLE_TLS:
+**
+**  --tls BOOLEAN            Activate built-in TLS decoding.
+**
+**  --tls-cert-file FILE     FILE contains both the PEM-encoded certificate and
+**                           the private key, concatenated together.
 **
 ** Command-line options can take either one or two initial "-" characters.
 ** So "--debug" and "-debug" mean the same thing, for example.
@@ -179,7 +187,7 @@
 ** come from CGI and SCGI.  To check an installation for security, then, it
 ** makes sense to focus on the CGI and SCGI scripts.
 **
-** To local all CGI files:
+** To locate all CGI files:
 **
 **          find *.website -executable -type f -print
 **     OR:  find *.website -perm +0111 -type f -print
@@ -331,7 +339,8 @@ static struct timeval beginTime; /* Time when this process starts */
 static int closeConnection = 0;  /* True to send Connection: close in reply */
 static int nRequest = 0;         /* Number of requests processed */
 static int omitLog = 0;          /* Do not make logfile entries if true */
-static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel), 2=builtin TLS support */
+static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel),
+                                 ** 2=builtin TLS support */
 static char *zHttp = "http";     /* http or https */
 static int useTimeout = 1;       /* True to use times */
 static int standalone = 0;       /* Run as a standalone server (no inetd) */
@@ -365,15 +374,15 @@ typedef struct TlsServerConn {
 ** local variables:
 */
 static struct TlsState {
-  int isInit; /* 0: uninit 1: init as client 2: init as server */
+  int isInit;             /* 0: uninit 1: init as client 2: init as server */
   SSL_CTX *ctx;
   const char * zCertFile; /* -tls-cert-file CLI arg */
   TlsServerConn * sslCon;
 } tlsState = {
-  0/*isInit*/,
-  NULL/*SSL_CTX *ctx*/,
-  NULL/*zCertFile*/,
-  NULL/*sslCon*/
+  0,                      /* isInit */
+  NULL,                   /* SSL_CTX *ctx */
+  NULL,                   /* zCertFile */
+  NULL                    /* sslCon */
 };
 /*
 ** Read a single line of text from the client and stores it in zBuf
@@ -421,8 +430,7 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
 ** be encrypted and sent back to the client. On success, returns
 ** the number of bytes written, else returns a negative value.
 */
-static int tls_write_server(void *pServerArg, void const *zBuf,
-                            size_t nBuf){
+static int tls_write_server(void *pServerArg, void const *zBuf,  size_t nBuf){
   int n;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf<=0 ) return 0;
@@ -451,13 +459,13 @@ static int tls_write_server(void *pServerArg, void const *zBuf,
 */
 #ifdef ENABLE_TLS
 static int althttpd_vprintf(char const * fmt, va_list va){
-  if(useHttps!=2 || NULL==tlsState.sslCon){
+  if( useHttps!=2 || NULL==tlsState.sslCon ){
     return vprintf(fmt, va);
   }else{
     enum { PF_BUFFER_SIZE = 1024 * 2 };
     static char pfBuffer[PF_BUFFER_SIZE] = {0};
     const int sz = vsnprintf(pfBuffer, PF_BUFFER_SIZE, fmt, va);
-    if(sz<PF_BUFFER_SIZE){
+    if( sz<PF_BUFFER_SIZE ){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
       Malfunction(500,"Output buffer is too small. Wanted %d bytes.",
@@ -491,38 +499,39 @@ static struct {
   char *zEnvName;
   char **pzEnvValue;
 } cgienv[] = {
-  { "CONTENT_LENGTH",          &zContentLength }, /* Must be first for SCGI */
-  { "AUTH_TYPE",                   &zAuthType },
-  { "AUTH_CONTENT",                &zAuthArg },
-  { "CONTENT_TYPE",                &zContentType },
-  { "DOCUMENT_ROOT",               &zHome },
-  { "HTTP_ACCEPT",                 &zAccept },
-  { "HTTP_ACCEPT_ENCODING",        &zAcceptEncoding },
-  { "HTTP_COOKIE",                 &zCookie },
-  { "HTTP_HOST",                   &zHttpHost },
-  { "HTTP_IF_MODIFIED_SINCE",      &zIfModifiedSince },
-  { "HTTP_IF_NONE_MATCH",          &zIfNoneMatch },
-  { "HTTP_REFERER",                &zReferer },
-  { "HTTP_USER_AGENT",             &zAgent },
-  { "PATH",                        &default_path },
-  { "PATH_INFO",                   &zPathInfo },
-  { "QUERY_STRING",                &zQueryString },
-  { "REMOTE_ADDR",                 &zRemoteAddr },
-  { "REQUEST_METHOD",              &zMethod },
-  { "REQUEST_URI",                 &zScript },
-  { "REMOTE_USER",                 &zRemoteUser },
-  { "SCGI",                        &zScgi },
-  { "SCRIPT_DIRECTORY",            &zDir },
-  { "SCRIPT_FILENAME",             &zFile },
-  { "SCRIPT_NAME",                 &zRealScript },
-  { "SERVER_NAME",                 &zServerName },
-  { "SERVER_PORT",                 &zServerPort },
-  { "SERVER_PROTOCOL",             &zProtocol },
+  { "CONTENT_LENGTH",           &zContentLength }, /* Must be first for SCGI */
+  { "AUTH_TYPE",                &zAuthType },
+  { "AUTH_CONTENT",             &zAuthArg },
+  { "CONTENT_TYPE",             &zContentType },
+  { "DOCUMENT_ROOT",            &zHome },
+  { "HTTP_ACCEPT",              &zAccept },
+  { "HTTP_ACCEPT_ENCODING",     &zAcceptEncoding },
+  { "HTTP_COOKIE",              &zCookie },
+  { "HTTP_HOST",                &zHttpHost },
+  { "HTTP_IF_MODIFIED_SINCE",   &zIfModifiedSince },
+  { "HTTP_IF_NONE_MATCH",       &zIfNoneMatch },
+  { "HTTP_REFERER",             &zReferer },
+  { "HTTP_USER_AGENT",          &zAgent },
+  { "PATH",                     &default_path },
+  { "PATH_INFO",                &zPathInfo },
+  { "QUERY_STRING",             &zQueryString },
+  { "REMOTE_ADDR",              &zRemoteAddr },
+  { "REQUEST_METHOD",           &zMethod },
+  { "REQUEST_URI",              &zScript },
+  { "REMOTE_USER",              &zRemoteUser },
+  { "SCGI",                     &zScgi },
+  { "SCRIPT_DIRECTORY",         &zDir },
+  { "SCRIPT_FILENAME",          &zFile },
+  { "SCRIPT_NAME",              &zRealScript },
+  { "SERVER_NAME",              &zServerName },
+  { "SERVER_PORT",              &zServerPort },
+  { "SERVER_PROTOCOL",          &zProtocol },
 };
 
 
 /*
-** Double any double-quote characters in a string.
+** Double any double-quote characters in a string.  This is used to
+** quote strings for output into the CSV log file.
 */
 static char *Escape(const char *z){
   size_t i, j;
@@ -1032,6 +1041,9 @@ static void Decode64(char *z64){
 #ifdef ENABLE_TLS
 /* This is a self-signed cert in the PEM format that can be used when
 ** no other certs are available.
+**
+** NB: Use of this self-signed cert is widely insecure.  Use for testing
+** purposes only.
 */
 static const char sslSelfCert[] = 
 "-----BEGIN CERTIFICATE-----\n"
@@ -1582,7 +1594,7 @@ static int countSlashes(const char *z){
 static void *tls_new_server(int iSocket){
   TlsServerConn *pServer = malloc(sizeof(*pServer));
   BIO *b = pServer ? BIO_new_socket(iSocket, 0) : NULL;
-  if(NULL==b){
+  if( NULL==b ){
     Malfunction(500,"Cannot allocate TlsServerConn.");
   }
   assert(NULL!=tlsState.ctx);
@@ -1605,7 +1617,7 @@ static void tls_close_server(void *pServerArg){
 }
 
 static void tls_atexit(void){
-  if(tlsState.sslCon){
+  if( tlsState.sslCon ){
     tls_close_server(tlsState.sslCon);
     tlsState.sslCon = NULL;
   }
@@ -1659,7 +1671,12 @@ static size_t althttpd_fread(void *tgt, size_t sz, size_t nmemb, FILE *in){
 ** ignored).
 ** 
 */
-static size_t althttpd_fwrite(void const *src, size_t sz, size_t nmemb, FILE *out){
+static size_t althttpd_fwrite(
+  void const *src,          /* Buffer containing content to write */
+  size_t sz,                /* Size of each element in the buffer */
+  size_t nmemb,             /* Number of elements to write */
+  FILE *out                 /* Write on this stream */
+){
   if( useHttps!=2 ){
     return fwrite(src, sz, nmemb, out);
   }
@@ -1772,7 +1789,7 @@ static int SendFile(
     return 1;
   }
 #ifdef linux
-  if(2!=useHttps){
+  if( 2!=useHttps ){
     off_t offset = rangeStart;
     nOut += sendfile(fileno(stdout), fileno(in), &offset, pStat->st_size);
   }else
@@ -1825,7 +1842,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
     alarm(0);
   }
 
-  if(isNPH){
+  if( isNPH ){
     /*
     ** Non-parsed-header output: simply pipe it out as-is. We
     ** need to go through this routine, instead of simply exec()'ing,
@@ -2073,11 +2090,11 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
 */
 static int tls_init_conn(int iSocket){
 #ifdef ENABLE_TLS
-  if(2==useHttps){
+  if( 2==useHttps ){
     /*assert(NULL==tlsState.sslCon);*/
-    if(NULL==tlsState.sslCon){
+    if( NULL==tlsState.sslCon ){
       tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
-      if(NULL==tlsState.sslCon){
+      if( NULL==tlsState.sslCon ){
         Malfunction(500,"Could not instantiate TLS context.");
       }
       atexit(tls_atexit);
@@ -2085,13 +2102,13 @@ static int tls_init_conn(int iSocket){
     return 1;
   }
 #else
-  if(0==iSocket){/*unused arg*/}
+  if( 0==iSocket ){/*unused arg*/}
 #endif
   return 0;
 }
 static void tls_close_conn(void){
 #ifdef ENABLE_TLS
-  if(tlsState.sslCon){
+  if( tlsState.sslCon ){
     tls_close_server(tlsState.sslCon);
     tlsState.sslCon = NULL;
   }
@@ -2134,7 +2151,7 @@ void ProcessOneRequest(int forceClose, int socketId){
          zRoot, getcwd(zBuf,sizeof(zBuf)-1));
   }
   nRequest++;
-  if(tls_init_conn(socketId)){
+  if( tls_init_conn(socketId) ){
     /* Never(?) reuse TLS connections? */
     forceClose = 1;
   }
@@ -2644,7 +2661,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       }
       close(0);
     }
-    if(zTmpNam){
+    if( zTmpNam ){
       /* Becomes the stdin of our upcoming CGI process. */
       open(zTmpNam, O_RDONLY);
     }
@@ -2886,14 +2903,14 @@ int main(int argc, const char **argv){
       maxCpu = atoi(zArg);
     }else if( strcmp(z,"-https")==0 ){
       int const x = atoi(zArg);
-      if(x<=0){
+      if( x<=0 ){
         useHttps = 0;
         zHttp = "http";
       }else{
         zHttp = "https";
         zRemoteAddr = getenv("REMOTE_HOST");
         useHttps = 1;
-        if(2==x){
+        if( 2==x ){
 #if ENABLE_TLS
           z = "-tls";
           goto arg_tls;
@@ -2905,7 +2922,7 @@ int main(int argc, const char **argv){
       }
     }else if( strcmp(z, "-port")==0 ){
       zPort = zArg;
-      if(0==standalone) standalone = 1;
+      if( 0==standalone ) standalone = 1;
     }else if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
@@ -2932,16 +2949,16 @@ int main(int argc, const char **argv){
 #ifdef ENABLE_TLS
     else if( 0==strncmp(z,"-tls",4) ){
       arg_tls:
-      if(strcmp(z,"-tls")==0){
+      if( strcmp(z,"-tls")==0 ){
         useHttps = atoi(zArg)>0 ? 2 : 0;
         zHttp = useHttps ? "https" : "http";
-        if(useHttps){
+        if( useHttps ){
           standalone = 2;
-          if(0==zPort){
+          if( 0==zPort ){
             zPort = "443";
           }
         }
-      }else if(strcmp(z, "-tls-cert-file")==0 ){
+      }else if( strcmp(z, "-tls-cert-file")==0 ){
         useHttps = 2;
         zHttp = "https";
         tlsState.zCertFile = zArg;
@@ -2981,7 +2998,7 @@ int main(int argc, const char **argv){
   ** cert is stored in space outside of the --root and not readable by
   ** the --user.
   */
-  if(useHttps>1){
+  if( useHttps>1 ){
     ssl_init_server(tlsState.zCertFile, tlsState.zCertFile);
   }
 #endif
@@ -3065,7 +3082,7 @@ int main(int argc, const char **argv){
   }
 
   /* Process the input stream */
-  if(useHttps!=2){
+  if( useHttps!=2 ){
     for(i=0; i<100; i++){
       ProcessOneRequest(0, httpConnection);
     }
