@@ -308,7 +308,8 @@
 */
 static const char *zRoot = 0;    /* Root directory of the website */
 static char *zTmpNam = 0;        /* Name of a temporary file */
-static char zTmpNamBuf[500];     /* Space to hold the temporary filename */
+static char zTmpBuf[10000];      /* Space to hold POST data or filename */
+static int nTmpBuf = 0;          /* Number of bytes of POST data */
 static char *zProtocol = 0;      /* The protocol being using by the browser */
 static char *zMethod = 0;        /* The method.  Must be GET */
 static char *zScript = 0;        /* The object to retrieve */
@@ -2415,10 +2416,10 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
   zQueryString = *zQuerySuffix ? &zQuerySuffix[1] : zQuerySuffix;
 
-  /* Create a file to hold the POST query data, if any.  We have to
-  ** do it this way.  We can't just pass the file descriptor down to
-  ** the child process because the fgets() function may have already
-  ** read part of the POST data into its internal buffer.
+  /* Create either a memory buffer or a file to hold the POST query data,
+  ** if any.  We have to do it this way.  We can't just pass the file
+  ** descriptor down to the child process because the fgets() function
+  ** may have already read part of the POST data into its internal buffer.
   */
   if( zMethod[0]=='P' && zContentLength!=0 ){
     size_t len = atoi(zContentLength);
@@ -2437,30 +2438,40 @@ void ProcessOneRequest(int forceClose, int socketId){
       exit(0);
     }
     rangeEnd = 0;
-    sprintf(zTmpNamBuf, "/tmp/-post-data-XXXXXX");
-    zTmpNam = zTmpNamBuf;
-    if( mkstemp(zTmpNam)<0 ){
-      Malfunction(280,  /* LOG: mkstemp() failed */
-               "Cannot create a temp file in which to store POST data");
+    if( len>sizeof(zTmpBuf) ){
+      /* The POST data is too big to fit in the zTmpBuf[]. Transfer it
+      ** all into a temporary file.  The name of the temporary file is
+      ** kept in zTmpBuf[] andn zTmpNam is made to point to that name.
+      */
+      sprintf(zTmpBuf, "/tmp/-post-data-XXXXXX");
+      zTmpNam = zTmpBuf;
+      if( mkstemp(zTmpNam)<0 ){
+        Malfunction(280,  /* LOG: mkstemp() failed */
+                 "Cannot create a temp file in which to store POST data");
+      }
+      out = fopen(zTmpNam,"wb");
+      if( out==0 ){
+        StartResponse("500 Cannot create /tmp file");
+        nOut += althttpd_printf(
+          "Content-type: text/plain; charset=utf-8\r\n"
+          "\r\n"
+          "Could not open \"%s\" for writing\n", zTmpNam
+        );
+        MakeLogEntry(0, 290); /* LOG: cannot create temp file for POST */
+        exit(0);
+      }
+      zBuf = SafeMalloc( len+1 );
+      if( useTimeout ) alarm(15 + len/2000);
+      n = althttpd_fread(zBuf,1,len,stdin);
+      nIn += n;
+      fwrite(zBuf,1,n,out);
+      free(zBuf);
+      fclose(out);
+    }else{
+      zTmpNam = 0;
+      nTmpBuf = n = althttpd_fread(zTmpBuf,1,len,stdin);
+      nIn += n;
     }
-    out = fopen(zTmpNam,"wb");
-    if( out==0 ){
-      StartResponse("500 Cannot create /tmp file");
-      nOut += althttpd_printf(
-        "Content-type: text/plain; charset=utf-8\r\n"
-        "\r\n"
-        "Could not open \"%s\" for writing\n", zTmpNam
-      );
-      MakeLogEntry(0, 290); /* LOG: cannot create temp file for POST */
-      exit(0);
-    }
-    zBuf = SafeMalloc( len+1 );
-    if( useTimeout ) alarm(15 + len/2000);
-    n = althttpd_fread(zBuf,1,len,stdin);
-    nIn += n;
-    fwrite(zBuf,1,n,out);
-    free(zBuf);
-    fclose(out);
   }
 
   /* Make sure the running time is not too great */
@@ -2635,8 +2646,10 @@ void ProcessOneRequest(int forceClose, int socketId){
 
   /* Take appropriate action
   */
-  if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){
-    char *zBaseFilename;         /* Filename without directory prefix */
+  if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){ /* CGI */
+    char *zBaseFilename;       /* Filename without directory prefix */
+    int px[2];                 /* CGI-1 to althttpd pipe */
+    int py[2];                 /* zTmpBuf to CGI-0 pipe */
 
     /*
     ** Abort with an error if the CGI script is writable by anyone other
@@ -2646,79 +2659,93 @@ void ProcessOneRequest(int forceClose, int socketId){
       CgiScriptWritable();
     }
 
-    /* If its executable, it must be a CGI program.  Start by
-    ** changing directories to the directory holding the program.
-    */
-    if( chdir(zDir) ){
-      char zBuf[1000];
-      Malfunction(420, /* LOG: chdir() failed */
-           "cannot chdir to [%s] from [%s]", 
-           zDir, getcwd(zBuf,999));
-    }
-
     /* Compute the base filename of the CGI script */
     for(i=strlen(zFile)-1; i>=0 && zFile[i]!='/'; i--){}
     zBaseFilename = &zFile[i+1];
 
-    /* Setup the environment appropriately.
-    */
-    putenv("GATEWAY_INTERFACE=CGI/1.0");
-    for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
-      if( *cgienv[i].pzEnvValue ){
-        SetEnv(cgienv[i].zEnvName,*cgienv[i].pzEnvValue);
-      }
+    /* Create pipes used to communicate with the child CGI process */
+    if( pipe(px) ){
+      Malfunction(440, /* LOG: pipe() failed */
+                  "Unable to create a pipe for the CGI program");
     }
-    if( useHttps ){
-      putenv("HTTPS=on");
-      putenv("REQUEST_SCHEME=https");
-    }else{
-      putenv("REQUEST_SCHEME=http");
-    }
+    if( zTmpNam==0 && pipe(py) ){
+      Malfunction(441, /* LOG: pipe() failed */
+                  "Unable to create a pipe for the CGI program");
+    }        
 
-    /* For the POST method all input has been written to a temporary file,
-    ** so we have to redirect input to the CGI script from that file.
-    */
-    if( zMethod[0]=='P' ){
-      if( dup(0)<0 ){
-        Malfunction(430,  /* LOG: dup(0) failed */
-                    "Unable to duplicate file descriptor 0");
+    /* Create the child process that will run the CGI. */
+    if( fork()==0 ){
+      /* This code is run by the child CGI process only
+      ** Begin by setting up the CGI-to-althttpd pipe    */
+      close(1);
+      if( dup(px[1])<0 ){
+        Malfunction(442, /* LOG: dup() failed */
+                    "CGI cannot dup() to file descriptor 1");
       }
-      close(0);
-    }
-    if( zTmpNam ){
-      /* Becomes the stdin of our upcoming CGI process. */
-      open(zTmpNam, O_RDONLY);
-    }
 
-    /* Fall thru to here for the NPH (non-parsed-headers) case and if
-    ** this process (the server) is going to read and augment the
-    ** header sent back by the CGI process. Open a pipe to receive
-    ** the output from the CGI process. Then fork the CGI process.
-    ** Once everything is done, we should be able to read the output
-    ** of CGI on the "in" stream.
-    */
-    {
-      int px[2];
-      if( pipe(px) ){
-        Malfunction(440, /* LOG: pipe() failed */
-                    "Unable to create a pipe for the CGI program");
-      }
-      if( fork()==0 ){
-        close(px[0]);
-        close(1);
-        if( dup(px[1])!=1 ){
-          Malfunction(450, /* LOG: dup(1) failed */
-                 "Unable to duplicate file descriptor %d to 1",
-                 px[1]);
+      /* Set up the althttpd-to-CGI link */
+      if( zTmpNam ){
+        close(0);
+        if( open(zTmpNam, O_RDONLY)<0 ){
+          Malfunction(443, /* LOG: dup() failed */
+                    "CGI cannot open temp file holding POST data: %s",
+                    zTmpNam);
         }
-        close(px[1]);
-        for(i=3; close(i)==0; i++){}
-        execl(zBaseFilename, zBaseFilename, (char*)0);
-        exit(0);
+      }else if( nTmpBuf>0 ){
+        close(0);
+        if( dup(py[0])<0 ){
+          Malfunction(444, /* LOG: dup() failed */
+                    "CGI cannot dup() to file descriptor 0");
+        }
       }
-      close(px[1]);
-      in = fdopen(px[0], "rb");
+
+      /* Close all surplus file descriptors */
+      for(i=3; close(i)==0; i++){}
+
+      /* Move into the directory holding the CGI program */
+      if( chdir(zDir) ){
+        char zBuf[1000];
+        Malfunction(445, /* LOG: chdir() failed */
+             "CGI cannot chdir to [%s] from [%s]", 
+             zDir, getcwd(zBuf,999));
+      }
+
+      /* Setup the CGI environment appropriately. */
+      putenv("GATEWAY_INTERFACE=CGI/1.0");
+      for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
+        if( *cgienv[i].pzEnvValue ){
+          SetEnv(cgienv[i].zEnvName,*cgienv[i].pzEnvValue);
+        }
+      }
+      if( useHttps ){
+        putenv("HTTPS=on");
+        putenv("REQUEST_SCHEME=https");
+      }else{
+        putenv("REQUEST_SCHEME=http");
+      }
+
+      /* Run the CGI program */
+      execl(zBaseFilename, zBaseFilename, (char*)0);
+      exit(0);  /* Not reached */
     }
+
+    /* This parent process.  The child has been started.
+    ** Set up the CGI-to-althttp pipe on which to receive the reply
+    */
+    close(px[1]);
+    in = fdopen(px[0], "rb");
+
+    /* Set up the althttp-to-CGI pipe used to send POST data (if any) */
+    if( zTmpNam==0 ){
+      close(py[0]);
+      while( nTmpBuf>0 ){
+        ssize_t wrote = write(py[1], zTmpBuf, nTmpBuf);
+        if( wrote>0 ) nTmpBuf -= wrote;
+      }
+      close(py[1]);
+    }
+        
+    /* Wait for the CGI program to reply and process that reply */
     if( in==0 ){
       CgiError();
     }else{
