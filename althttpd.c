@@ -838,7 +838,9 @@ static void StartResponse(const char *zResultCode){
   time_t now;
   time(&now);
   if( statusSent ) return;
-  nOut += althttpd_printf("%s %s\r\n", zProtocol, zResultCode);
+  nOut += althttpd_printf("%s %s\r\n",
+                          zProtocol ? zProtocol : "HTTP/1.1",
+                          zResultCode);
   strncpy(zReplyStatus, zResultCode, 3);
   zReplyStatus[3] = 0;
   if( zReplyStatus[0]>='4' ){
@@ -1182,6 +1184,8 @@ end_of_upkfm:
 static void ssl_init_server(const char *zCertFile,
                             const char *zKeyFile){
   if( tlsState.isInit==0 ){
+    const int useSelfSigned = zCertFile
+      && 0==strcmp("builtin", zCertFile);
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
@@ -1190,7 +1194,7 @@ static void ssl_init_server(const char *zCertFile,
       ERR_print_errors_fp(stderr);
       Malfunction(500,"Error initializing the SSL server");
     }
-    if( zCertFile && zCertFile[0] ){
+    if( !useSelfSigned && zCertFile && zCertFile[0] ){
       if( SSL_CTX_use_certificate_chain_file(tlsState.ctx,
                                              zCertFile)!=1 ){
         ERR_print_errors_fp(stderr);
@@ -1204,9 +1208,13 @@ static void ssl_init_server(const char *zCertFile,
         Malfunction(500,"Error loading PRIVATE KEY from file \"%s\"",
                     zKeyFile);
       }
-    }else if( sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
-        || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
-      Malfunction(500,"Error loading self-signed CERT");
+    }else if( useSelfSigned ){
+      if(sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
+         || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
+        Malfunction(500,"Error loading self-signed CERT");
+      }
+    }else{
+      Malfunction(500,"No certificate TLS specified");
     }
     if( !SSL_CTX_check_private_key(tlsState.ctx) ){
       Malfunction(500,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
@@ -2960,13 +2968,6 @@ int main(int argc, const char **argv){
       }
     }else if( strcmp(z, "-pkey")==0 ){
       tlsState.zKeyFile = zArg;
-    }else if( strcmp(z, "-tls")==0 && atoi(zArg) ){
-      useHttps = 2;
-      zHttp = "https";
-      if( standalone ){
-        standalone = 2;
-        if( 0==zPort ) zPort = "443";
-      }
     }
 #endif
     else if( strcmp(z, "-datetest")==0 ){

@@ -240,10 +240,10 @@ If althttpd is built with TLS support then it can be told to operate
 in HTTPS mode with one of the following options:
 
 >
-    althttpd -root ~/www --port 8043 -tls 1
+    althttpd -root ~/www --port 8043 --cert builtin
 
 this option uses a compiled-in self-signed SSL certificate
-**which is wildly insecure** and is intended for testing purposes.
+**which is wildly insecure** and is intended for testing purposes
 only.  Use the --cert option to specify your own PEM-format SSL
 certificate.  The argument to --cert can be the concatenation of
 the SSL private key (often named "privkey.pem") and the certificate
@@ -251,7 +251,7 @@ chain (often named "fullchain.pem").  Alternatively, the --cert
 can point to just the fullchain.pem file and the separate --pkey
 option can point to the privkey.pem file.
 
-Start althttpd with:
+Using your own certificate:
 
 >
     althttpd -root ~/www --port 8043 --cert fullchain.pem --pkey privkey.pem
@@ -274,7 +274,7 @@ in the document hierarchy as long as the filenames being with "." or "-".
 
 An exception:  Though althttpd normally returns 404 Not Found for any
 request with a path element beginning with ".", it does allow requests
-where the URI begins with "/.well-known/".  And file or directory names
+where the URI begins with "/.well-known/".  File or directory names
 below "/.well-known/" are allowed to begin with "." or "-" (but not
 with "..").  This exception is necessary to allow LetsEncrypt to validate
 ownership of the website.
