@@ -425,17 +425,17 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
 /*
 ** Reads up tp nBuf bytes of TLS-decoded bytes from the client and
 ** stores them in zBuf, which must be least nBuf bytes long.  Returns
-** the number of bytes read. Fails fatally if nBuf is "too big". Once
-** pServerArg reaches EOF, this function simply returns 0.
+** the number of bytes read. Fails fatally if nBuf is "too big" or if
+** SSL_read() fails. Once pServerArg reaches EOF, this function simply
+** returns 0 with no side effects.
 */
 static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
-  int n, err = 0;
+  int err = 0;
   size_t rc = 0;
-  TlsServerConn *pServer = (TlsServerConn*)pServerArg;
-  if( pServer->atEof ) return 0;
+  TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL read too big"); }
   while( 0==err && nBuf!=rc && 0==pServer->atEof ){
-    n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
+    const int n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
     if( n==0 ){
       pServer->atEof = 1;
       break;
@@ -444,6 +444,8 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
     if(0==err){
       rc += n;
       pServer->atEof = BIO_eof(pServer->bio);
+    }else{
+      Malfunction(500,"SSL read error.");
     }
   }
   return rc;
@@ -2184,10 +2186,7 @@ void ProcessOneRequest(int forceClose, int socketId){
          zRoot, getcwd(zBuf,sizeof(zBuf)-1));
   }
   nRequest++;
-  if( tls_init_conn(socketId) ){
-    /* Never(?) reuse TLS connections? */
-    forceClose = 1;
-  }
+  tls_init_conn(socketId);
   /*
   ** We must receive a complete header within 15 seconds
   */
@@ -3120,6 +3119,8 @@ int main(int argc, const char **argv){
 
   /* Process the input stream */
   if( useHttps!=2 ){
+    /* In builtin TLS mode this loop leads to
+    ** SSL-related response errors. */
     for(i=0; i<100; i++){
       ProcessOneRequest(0, httpConnection);
     }
