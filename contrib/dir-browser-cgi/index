@@ -1,0 +1,5 @@
+#!/bin/sh
+DIR_INDEX_PARENT=1
+#DIR_INDEX_ONLY_DIRS=1
+#DIR_INDEX_ONLY_FILES=1
+. /path/to/dir-index.sh
