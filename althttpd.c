@@ -373,6 +373,7 @@ static void Malfunction(int errNo, const char *zFormat, ...);
 #include <openssl/x509.h>
 typedef struct TlsServerConn {
   SSL *ssl;          /* The SSL codec */
+  BIO *bio;          /* SSL BIO object */
   int atEof;         /* True when EOF reached. */
   int iSocket;       /* The socket */
 } TlsServerConn;
@@ -427,13 +428,24 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
 ** pServerArg reaches EOF, this function simply returns 0.
 */
 static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
-  int n;
+  int n, err = 0;
+  size_t rc = 0;
   TlsServerConn *pServer = (TlsServerConn*)pServerArg;
   if( pServer->atEof ) return 0;
   if( nBuf>0x7fffffff ){ Malfunction(500,"SSL read too big"); }
-  n = SSL_read(pServer->ssl, zBuf, (int)nBuf);
-  if( n==0 ) pServer->atEof = 1;
-  return n<=0 ? 0 : n;
+  while( 0==err && nBuf!=rc && 0==pServer->atEof ){
+    n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
+    if( n==0 ){
+      pServer->atEof = 1;
+      break;
+    }
+    err = SSL_get_error(pServer->ssl, n);
+    if(0==err){
+      rc += n;
+      pServer->atEof = BIO_eof(pServer->bio);
+    }
+  }
+  return rc;
 }
 
 /*
@@ -1611,6 +1623,7 @@ static void *tls_new_server(int iSocket){
   assert(NULL!=tlsState.ctx);
   pServer->ssl = SSL_new(tlsState.ctx);
   pServer->atEof = 0;
+  pServer->bio = b;
   pServer->iSocket = iSocket;
   SSL_set_bio(pServer->ssl, b, b);
   SSL_accept(pServer->ssl);
@@ -2444,6 +2457,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     zBuf = SafeMalloc( len+1 );
     if( useTimeout ) alarm(15 + len/2000);
     n = althttpd_fread(zBuf,1,len,stdin);
+    fprintf(stderr,"len=%d, n=%d, zTmpNam=%s\n", (int)len, (int)n, zTmpNam);
     nIn += n;
     fwrite(zBuf,1,n,out);
     free(zBuf);
