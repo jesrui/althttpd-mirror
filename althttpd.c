@@ -332,6 +332,8 @@ static char *zAuthArg = 0;       /* Authorization values */
 static char *zRemoteUser = 0;    /* REMOTE_USER set by authorization module */
 static char *zIfNoneMatch= 0;    /* The If-None-Match header value */
 static char *zIfModifiedSince=0; /* The If-Modified-Since header value */
+static char *zHttpScheme = 0;    /* HTTP_SCHEME CGI variable */
+static char *zHttps = 0;         /* HTTPS CGI variable */
 static int nIn = 0;              /* Number of bytes of input */
 static int nOut = 0;             /* Number of bytes of output */
 static char zReplyStatus[4];     /* Reply status code */
@@ -390,10 +392,11 @@ static struct TlsState {
   NULL,                   /* zKeyFile */
   NULL                    /* sslCon */
 };
+
 /*
 ** Read a single line of text from the client and stores it in zBuf
 ** (which must be at least nBuf bytes long). At EOF it sets
-** tlsState.sslCon->atEof to non-0 and returns 0.  On error is simply
+** tlsState.sslCon->atEof to non-0 and returns 0.  On error simply
 ** returns 0. Once tlsState.sslCon->atEof is non-0, subsequent calls
 ** to this function return 0 without reading anything.
 **
@@ -415,6 +418,7 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
   zBuf[i+1] = 0;
   return zBuf;
 }
+
 /*
 ** Reads up tp nBuf bytes of TLS-decoded bytes from the client and
 ** stores them in zBuf, which must be least nBuf bytes long.  Returns
@@ -532,7 +536,9 @@ static struct {
   { "HTTP_IF_MODIFIED_SINCE",   &zIfModifiedSince },
   { "HTTP_IF_NONE_MATCH",       &zIfNoneMatch },
   { "HTTP_REFERER",             &zReferer },
+  { "HTTP_SCHEME",              &zHttpScheme },
   { "HTTP_USER_AGENT",          &zAgent },
+  { "HTTPS",                    &zHttps },
   { "PATH",                     &default_path },
   { "PATH_INFO",                &zPathInfo },
   { "QUERY_STRING",             &zQueryString },
@@ -2081,6 +2087,12 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   zHdr = 0;
   if( zContentLength==0 ) zContentLength = "0";
   zScgi = "1";
+  if( useHttps ){
+    zHttps = "on";
+    zHttpScheme = "https";
+  }else{
+    zHttpScheme = "http";
+  }
   for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
     int n1, n2;
     if( cgienv[i].pzEnvValue[0]==0 ) continue;
@@ -2673,16 +2685,16 @@ void ProcessOneRequest(int forceClose, int socketId){
 
       /* Setup the CGI environment appropriately. */
       putenv("GATEWAY_INTERFACE=CGI/1.0");
+      if( useHttps ){
+        zHttps = "on";
+        zHttpScheme = "https";
+      }else{
+        zHttpScheme = "http";
+      }
       for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
         if( *cgienv[i].pzEnvValue ){
           SetEnv(cgienv[i].zEnvName,*cgienv[i].pzEnvValue);
         }
-      }
-      if( useHttps ){
-        putenv("HTTPS=on");
-        putenv("REQUEST_SCHEME=https");
-      }else{
-        putenv("REQUEST_SCHEME=http");
       }
 
       /* Run the CGI program */
