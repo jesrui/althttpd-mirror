@@ -2734,11 +2734,9 @@ void ProcessOneRequest(int forceClose, int socketId){
     ** to be copied to output.
     */
     if( SendFile(zFile, lenFile, &statbuf) ){
-      tls_close_conn();
       return;
     }
   }
-  tls_close_conn();
   althttpd_fflush(stdout);
   MakeLogEntry(0, 0);  /* LOG: Normal reply */
 
@@ -3081,14 +3079,11 @@ int main(int argc, const char **argv){
   }
 
   /* Process the input stream */
-  if( useHttps!=2 ){
-    /* In builtin TLS mode this loop leads to
-    ** SSL-related response errors. */
-    for(i=0; i<100; i++){
-      ProcessOneRequest(0, httpConnection);
-    }
+  for(i=0; i<100; i++){
+    ProcessOneRequest(0, httpConnection);
   }
   ProcessOneRequest(1, httpConnection);
+  tls_close_conn();
   exit(0);
 }
 
