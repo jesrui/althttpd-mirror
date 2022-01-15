@@ -18,6 +18,6 @@ See the comments in `dir-index.sh` for its configurable options and
 hack it to suit site-specific preferences such as look and feel, or to
 add script-driven features such as sortable table columns.
 
-**BSD users:*** as written, `dir-index.sh` assumes GNU-compatible
+**BSD users:** as written, `dir-index.sh` assumes GNU-compatible
 versions of commands like `date` and `stat` and requires modification
 in order to run on systems which don't use those versions.
