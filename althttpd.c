@@ -1174,8 +1174,8 @@ end_of_upkfm:
 ** zCertFile is assumed to be a concatenation of the certificate and
 ** the private-key in the PEM format.
 **
-** If zCertFile is NULL or empty then a built-in self-signed cert is
-** used.
+** If zCertFile is "builtin" then a built-in self-signed cert is
+** used and zKeyFile is ignored.
 **
 ** Error messages may contain the paths to the given files, but this
 ** function is called before the server starts listening for requests,
