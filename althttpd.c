@@ -2457,7 +2457,6 @@ void ProcessOneRequest(int forceClose, int socketId){
     zBuf = SafeMalloc( len+1 );
     if( useTimeout ) alarm(15 + len/2000);
     n = althttpd_fread(zBuf,1,len,stdin);
-    fprintf(stderr,"len=%d, n=%d, zTmpNam=%s\n", (int)len, (int)n, zTmpNam);
     nIn += n;
     fwrite(zBuf,1,n,out);
     free(zBuf);
