@@ -2604,7 +2604,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       break;
     }
     if( zScript[i]==0 || zScript[i+1]==0 ){
-      static const char *azIndex[] = { "/home", "/index.html", "/index.cgi" };
+      static const char *azIndex[] = { "/home", "/index", "/index.html", "/index.cgi" };
       int k = j>0 && zLine[j-1]=='/' ? j-1 : j;
       unsigned int jj;
       for(jj=0; jj<sizeof(azIndex)/sizeof(azIndex[0]); jj++){
