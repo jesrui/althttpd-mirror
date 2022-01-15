@@ -72,7 +72,7 @@ It should be relatively easy to customize for specialized needs.
 To build althttpd with built-in TLS support using libssl:
 
 >
-    gcc -Os -o /usr/bin/althttpd -fPIC -DENABLE_SSL -lssl -lcrypto \
+    gcc -Os -o /usr/bin/althttpd -fPIC -DENABLE_TLS -lssl -lcrypto \
     althttpd.c
 
 
