@@ -346,7 +346,6 @@ static int nRequest = 0;         /* Number of requests processed */
 static int omitLog = 0;          /* Do not make logfile entries if true */
 static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel),
                                  ** 2=builtin TLS support */
-static char *zHttp = "http";     /* http or https */
 static int useTimeout = 1;       /* True to use times */
 static int standalone = 0;       /* Run as a standalone server (no inetd) */
 static int ipv6Only = 0;         /* Use IPv6 only */
@@ -655,7 +654,7 @@ static void MakeLogEntry(int exitCode, int lineNum){
       fprintf(log,
         "%s,%s,\"%s://%s%s\",\"%s\","
            "%s,%d,%d,%lld,%lld,%lld,%lld,%lld,%d,\"%s\",\"%s\",%d,%d\n",
-        zDate, zRemoteAddr, zHttp, Escape(zHttpHost), Escape(zScript),
+        zDate, zRemoteAddr, zHttpScheme, Escape(zHttpHost), Escape(zScript),
         Escape(zReferer), zReplyStatus, nIn, nOut,
         tvms(&self.ru_utime) - tvms(&priorSelf.ru_utime),
         tvms(&self.ru_stime) - tvms(&priorSelf.ru_stime),
@@ -663,7 +662,7 @@ static void MakeLogEntry(int exitCode, int lineNum){
         tvms(&children.ru_stime) - tvms(&priorChild.ru_stime),
         tvms(&now) - tvms(&beginTime),
         nRequest, Escape(zAgent), Escape(zRM),
-        (int)(strlen(zHttp)+strlen(zHttpHost)+strlen(zRealScript)+3),
+        (int)(strlen(zHttpScheme)+strlen(zHttpHost)+strlen(zRealScript)+3),
         lineNum
       );
       priorSelf = self;
@@ -1009,10 +1008,10 @@ static void Redirect(const char *zPath, int iStatus, int finish, int lineno){
   }
   if( zServerPort==0 || zServerPort[0]==0 || strcmp(zServerPort,"80")==0 ){
     nOut += althttpd_printf("Location: %s://%s%s%s\r\n",
-                   zHttp, zServerName, zPath, zQuerySuffix);
+                   zHttpScheme, zServerName, zPath, zQuerySuffix);
   }else{
     nOut += althttpd_printf("Location: %s://%s:%s%s%s\r\n",
-                   zHttp, zServerName, zServerPort, zPath, zQuerySuffix);
+                   zHttpScheme, zServerName, zServerPort, zPath, zQuerySuffix);
   }
   if( finish ){
     nOut += althttpd_printf("Content-length: 0\r\n");
@@ -1303,7 +1302,7 @@ static int CheckBasicAuthorization(const char *zAuthFile){
       }
     }else if( strcmp(zFieldName,"http-redirect")==0 ){
       if( !useHttps ){
-        zHttp = "https";
+        zHttpScheme = "https";
         Redirect(zScript, 301, 1, 170); /* LOG: -auth redirect */
         fclose(in);
         return 0;
@@ -2087,12 +2086,6 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   zHdr = 0;
   if( zContentLength==0 ) zContentLength = "0";
   zScgi = "1";
-  if( useHttps ){
-    zHttps = "on";
-    zHttpScheme = "https";
-  }else{
-    zHttpScheme = "http";
-  }
   for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
     int n1, n2;
     if( cgienv[i].pzEnvValue[0]==0 ) continue;
@@ -2685,12 +2678,6 @@ void ProcessOneRequest(int forceClose, int socketId){
 
       /* Setup the CGI environment appropriately. */
       putenv("GATEWAY_INTERFACE=CGI/1.0");
-      if( useHttps ){
-        zHttps = "on";
-        zHttpScheme = "https";
-      }else{
-        zHttpScheme = "http";
-      }
       for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
         if( *cgienv[i].pzEnvValue ){
           SetEnv(cgienv[i].zEnvName,*cgienv[i].pzEnvValue);
@@ -2826,7 +2813,8 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
         p=p->ai_next){
     listener[n] = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
     if( listener[n]>=0 ){
-      /* if we can't terminate nicely, at least allow the socket to be reused */
+      /* if we can't terminate nicely, at least allow the socket to
+      ** be reused */
       setsockopt(listener[n], SOL_SOCKET, SO_REUSEADDR,&opt, sizeof(opt));
       
 #if defined(IPV6_V6ONLY)
@@ -2905,12 +2893,12 @@ int http_server(const char *zPort, int localOnly, int * httpConnection){
 }
 
 int main(int argc, const char **argv){
-  int i;                    /* Loop counter */
-  const char *zPermUser = 0;/* Run daemon with this user's permissions */
-  const char *zPort = 0;    /* Implement an HTTP server process */
-  int useChrootJail = 1;    /* True to use a change-root jail */
-  struct passwd *pwd = 0;   /* Information about the user */
-  int httpConnection = 0;   /* Socket ID of inbound http connection */
+  int i;                     /* Loop counter */
+  const char *zPermUser = 0; /* Run daemon with this user's permissions */
+  const char *zPort = 0;     /* Implement an HTTP server on this port */
+  int useChrootJail = 1;     /* True to use a change-root jail */
+  struct passwd *pwd = 0;    /* Information about the user */
+  int httpConnection = 0;    /* Socket ID of inbound http connection */
 
   /* Record the time when processing begins.
   */
@@ -2936,9 +2924,11 @@ int main(int argc, const char **argv){
       int const x = atoi(zArg);
       if( x<=0 ){
         useHttps = 0;
-        zHttp = "http";
+        zHttpScheme = "http";
+        zHttps = 0;
       }else{
-        zHttp = "https";
+        zHttpScheme = "https";
+        zHttps = "on";
         zRemoteAddr = getenv("REMOTE_HOST");
         useHttps = 1;
       }
@@ -2971,12 +2961,12 @@ int main(int argc, const char **argv){
 #ifdef ENABLE_TLS
     else if( strcmp(z, "-cert")==0 ){
       useHttps = 2;
-      zHttp = "https";
+      zHttpScheme = "https";
+      zHttps = "on";
       tlsState.zCertFile = zArg;
       if( tlsState.zKeyFile==0 ) tlsState.zKeyFile = zArg;
       if( standalone ){
         standalone = 2;
-        if( 0==zPort ) zPort = "443";
       }
     }else if( strcmp(z, "-pkey")==0 ){
       tlsState.zKeyFile = zArg;
@@ -3007,7 +2997,7 @@ int main(int argc, const char **argv){
   ** cert is stored in space outside of the --root and not readable by
   ** the --user.
   */
-  if( useHttps>1 ){
+  if( useHttps>=2 ){
     ssl_init_server(tlsState.zCertFile, tlsState.zKeyFile);
   }
 #endif
