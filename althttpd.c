@@ -287,6 +287,7 @@
 #include <sys/sendfile.h>
 #endif
 #include <assert.h>
+#include "althttpd.h"
 
 /*
 ** Configure the server by setting the following macros and recompiling.
@@ -301,6 +302,10 @@
 #define MAX_CPU 30                /* Max CPU cycles in seconds */
 #endif
 
+#ifndef SERVER_SOFTWARE
+#  define SERVER_SOFTWARE "althttpd " ALTHTTPD_VERSION
+#endif
+
 /*
 ** We record most of the state information as global variables.  This
 ** saves having to pass information to subroutines as parameters, and
@@ -311,6 +316,7 @@ static char *zTmpNam = 0;        /* Name of a temporary file */
 static char zTmpBuf[10000];      /* Space to hold POST data or filename */
 static int nTmpBuf = 0;          /* Number of bytes of POST data */
 static char *zProtocol = 0;      /* The protocol being using by the browser */
+static char *zServerSoftware = 0;/* Software name and version info */
 static char *zMethod = 0;        /* The method.  Must be GET */
 static char *zScript = 0;        /* The object to retrieve */
 static char *zRealScript = 0;    /* The object to retrieve.  Same as zScript
@@ -552,6 +558,7 @@ static struct {
   { "SERVER_NAME",              &zServerName },
   { "SERVER_PORT",              &zServerPort },
   { "SERVER_PROTOCOL",          &zProtocol },
+  { "SERVER_SOFTWARE",          &zServerSoftware },
 };
 
 
@@ -3009,7 +3016,10 @@ int main(int argc, const char **argv){
       tlsState.zKeyFile = zArg;
     }
 #endif
-    else if( strcmp(z, "-datetest")==0 ){
+    else if( strcmp(z, "-version")==0 ){
+      puts(SERVER_SOFTWARE);
+      return 0;
+    }else if( strcmp(z, "-datetest")==0 ){
       TestParseRfc822Date();
       printf("Ok\n");
       exit(0);
@@ -3116,6 +3126,8 @@ int main(int argc, const char **argv){
   ){
     zRemoteAddr += 7;
   }
+
+  zServerSoftware = StrDup(SERVER_SOFTWARE);
 
   /* Process the input stream */
   if( useHttps!=2 ){
