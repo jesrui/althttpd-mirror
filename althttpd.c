@@ -15,7 +15,7 @@
 **
 ** Features:
 **
-**     * Launched from inetd/xinetd/stunnel4, or as a stand-alone server
+**     * Launched from inetd/xinetd/systemd, or as a stand-alone server
 **     * One process per request
 **     * Deliver static content or run CGI or SCGI
 **     * Virtual sites based on the "Host:" property of the HTTP header
@@ -30,9 +30,9 @@
 **
 ** Setup rules:
 **
-**    (1) Launch as root from inetd like this:
+**    (1) Launch as root from inetd/systemd like this:
 **
-**            httpd -logfile logfile -root /home/www -user nobody
+**            althttpd -logfile logfile -root /home/www -user nobody
 **
 **        It will automatically chroot to /home/www and become user "nobody".
 **        The logfile name should be relative to the chroot jail.
@@ -56,28 +56,29 @@
 **        a defense against cross-site scripting attacks and other mischief.
 **
 **    (5) Executable files are run as CGI.  Files whose name ends with ".scgi"
-**        trigger and SCGI request (see item 10 below).  All other files
+**        trigger an SCGI request (see item 10 below).  All other files
 **        are delivered as is.
 **
-**    (6) For SSL support use stunnel and add the -https 1 option on the
-**        httpd command-line.
-**
-**    (7) If a file named "-auth" exists in the same directory as the file to
+**    (6) If a file named "-auth" exists in the same directory as the file to
 **        be run as CGI or to be delivered, then it contains information
 **        for HTTP Basic authorization.  See file format details below.
 **
-**    (8) To run as a stand-alone server, simply add the "-port N" command-line
+**    (7) To run as a stand-alone server, simply add the "-port N" command-line
 **        option to define which TCP port to listen on.
 **
-**    (9) For static content, the mimetype is determined by the file suffix
+**    (8) For static content, the mimetype is determined by the file suffix
 **        using a table built into the source code below.  If you have
 **        unusual content files, you might need to extend this table.
 **
-**   (10) Content files that end with ".scgi" and that contain text of the
+**    (9) Content files that end with ".scgi" and that contain text of the
 **        form "SCGI hostname port" will format an SCGI request and send it
 **        to hostname:port, then relay back the reply.  Error behavior is
 **        determined by subsequent lines of the .scgi file.  See SCGI below
 **        for details.
+**
+**   (10) If compiled with -DENABLE_TLS and linked against OpenSSL and
+**        launched with a --cert option to identify a certificate file, then
+**        TLS is used to encrypt the connection.
 **
 ** Command-line Options:
 **
@@ -135,13 +136,6 @@
 **  --pkey FILE      The TLS private key, the "privkey.pem" file.  May be
 **                   omitted if the --cert file is the concatenation of
 **                   the fullchain.pem and the privkey.pem.
-**
-**  --tls BOOLEAN    Activate TLS support if BOOLEAN is true.  This is
-**                   implied if the --cert option is specified.  If this
-**                   option is true and --cert is omitted, then an
-**                   insecure self-signed certificate is used.  Use this
-**                   self-signed cert for testing purposes only, as it is
-**                   wildly insecure.
 **
 **
 ** Command-line options can take either one or two initial "-" characters.
@@ -298,7 +292,7 @@
 #define MAX_CONTENT_LENGTH 250000000  /* Max length of HTTP request content */
 #endif
 #ifndef MAX_CPU
-#define MAX_CPU 30                /* Max CPU cycles in seconds */
+#define MAX_CPU 30                    /* Max CPU cycles in seconds */
 #endif
 
 /*
@@ -307,9 +301,8 @@
 ** makes the executable smaller...
 */
 static const char *zRoot = 0;    /* Root directory of the website */
-static char *zTmpNam = 0;        /* Name of a temporary file */
-static char zTmpBuf[10000];      /* Space to hold POST data or filename */
-static int nTmpBuf = 0;          /* Number of bytes of POST data */
+static char *zPostData= 0;       /* POST data */
+static int nPostData = 0;        /* Number of bytes of POST data */
 static char *zProtocol = 0;      /* The protocol being using by the browser */
 static char *zMethod = 0;        /* The method.  Must be GET */
 static char *zScript = 0;        /* The object to retrieve */
@@ -433,7 +426,9 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   int err = 0;
   size_t rc = 0;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
-  if( nBuf>0x7fffffff ){ Malfunction(500,"SSL read too big"); }
+  if( nBuf>0x7fffffff ){
+    Malfunction(500,"SSL read too big");
+  }
   while( 0==err && nBuf!=rc && 0==pServer->atEof ){
     const int n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
     if( n==0 ){
@@ -591,8 +586,9 @@ static long long int tvms(struct timeval *p){
 */
 static void MakeLogEntry(int exitCode, int lineNum){
   FILE *log;
-  if( zTmpNam ){
-    unlink(zTmpNam);
+  if( zPostData ){
+    free(zPostData);
+    zPostData = 0;
   }
   if( zLogFile && !omitLog ){
     struct timeval now;
@@ -1781,7 +1777,7 @@ static int SendFile(
   char zETag[100];
 
   zContentType = GetMimeType(zFile, lenFile);
-  if( zTmpNam ) unlink(zTmpNam);
+  if( zPostData ){ free(zPostData); zPostData = 0; }
   sprintf(zETag, "m%xs%x", (int)pStat->st_mtime, (int)pStat->st_size);
   if( CompareEtags(zIfNoneMatch,zETag)==0
    || (zIfModifiedSince!=0
@@ -2109,11 +2105,16 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   fwrite(zHdr, 1, nHdr, s);
   fprintf(s,",");
   free(zHdr);
-  if( zMethod[0]=='P'
-   && atoi(zContentLength)>0 
-   && (in = fopen(zTmpNam,"r"))!=0 ){
-    stream_file(in, s);
-    fclose(in);
+  if( nPostData>0 ){
+    size_t wrote = 0;
+    while( wrote<(size_t)nPostData ){
+      size_t n = fwrite(zPostData+wrote, 1, nPostData-wrote, s);
+      if( n<=0 ) break;
+      wrote += n;
+    }
+    free(zPostData);
+    zPostData = 0;
+    nPostData = 0;
   }
   fflush(s);
   CgiHandleReply(s, 0);
@@ -2423,17 +2424,9 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
   zQueryString = *zQuerySuffix ? &zQuerySuffix[1] : zQuerySuffix;
 
-  /* Create either a memory buffer or a file to hold the POST query data,
-  ** if any.  We have to do it this way.  We can't just pass the file
-  ** descriptor down to the child process because the fgets() function
-  ** may have already read part of the POST data into its internal buffer.
-  */
+  /* Create either a memory buffer to hold the POST query data */
   if( zMethod[0]=='P' && zContentLength!=0 ){
     size_t len = atoi(zContentLength);
-    FILE *out;
-    char *zBuf;
-    int n;
-
     if( len>MAX_CONTENT_LENGTH ){
       StartResponse("500 Request too large");
       nOut += althttpd_printf(
@@ -2445,40 +2438,10 @@ void ProcessOneRequest(int forceClose, int socketId){
       exit(0);
     }
     rangeEnd = 0;
-    if( len>sizeof(zTmpBuf) ){
-      /* The POST data is too big to fit in the zTmpBuf[]. Transfer it
-      ** all into a temporary file.  The name of the temporary file is
-      ** kept in zTmpBuf[] andn zTmpNam is made to point to that name.
-      */
-      sprintf(zTmpBuf, "/tmp/-post-data-XXXXXX");
-      zTmpNam = zTmpBuf;
-      if( mkstemp(zTmpNam)<0 ){
-        Malfunction(280,  /* LOG: mkstemp() failed */
-                 "Cannot create a temp file in which to store POST data");
-      }
-      out = fopen(zTmpNam,"wb");
-      if( out==0 ){
-        StartResponse("500 Cannot create /tmp file");
-        nOut += althttpd_printf(
-          "Content-type: text/plain; charset=utf-8\r\n"
-          "\r\n"
-          "Could not open \"%s\" for writing\n", zTmpNam
-        );
-        MakeLogEntry(0, 290); /* LOG: cannot create temp file for POST */
-        exit(0);
-      }
-      zBuf = SafeMalloc( len+1 );
-      if( useTimeout ) alarm(15 + len/2000);
-      n = althttpd_fread(zBuf,1,len,stdin);
-      nIn += n;
-      fwrite(zBuf,1,n,out);
-      free(zBuf);
-      fclose(out);
-    }else{
-      zTmpNam = 0;
-      nTmpBuf = n = althttpd_fread(zTmpBuf,1,len,stdin);
-      nIn += n;
-    }
+    zPostData = SafeMalloc( len+1 );
+    if( useTimeout ) alarm(15 + len/2000);
+    nPostData = althttpd_fread(zPostData,1,len,stdin);
+    nIn += nPostData;
   }
 
   /* Make sure the running time is not too great */
@@ -2656,7 +2619,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){ /* CGI */
     char *zBaseFilename;       /* Filename without directory prefix */
     int px[2];                 /* CGI-1 to althttpd pipe */
-    int py[2];                 /* zTmpBuf to CGI-0 pipe */
+    int py[2];                 /* zPostData to CGI-0 pipe */
 
     /*
     ** Abort with an error if the CGI script is writable by anyone other
@@ -2675,7 +2638,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       Malfunction(440, /* LOG: pipe() failed */
                   "Unable to create a pipe for the CGI program");
     }
-    if( zTmpNam==0 && pipe(py) ){
+    if( pipe(py) ){
       Malfunction(441, /* LOG: pipe() failed */
                   "Unable to create a pipe for the CGI program");
     }        
@@ -2683,7 +2646,7 @@ void ProcessOneRequest(int forceClose, int socketId){
     /* Create the child process that will run the CGI. */
     if( fork()==0 ){
       /* This code is run by the child CGI process only
-      ** Begin by setting up the CGI-to-althttpd pipe    */
+      ** Begin by setting up the CGI-to-althttpd pipe */
       close(1);
       if( dup(px[1])<0 ){
         Malfunction(442, /* LOG: dup() failed */
@@ -2691,19 +2654,10 @@ void ProcessOneRequest(int forceClose, int socketId){
       }
 
       /* Set up the althttpd-to-CGI link */
-      if( zTmpNam ){
-        close(0);
-        if( open(zTmpNam, O_RDONLY)<0 ){
-          Malfunction(443, /* LOG: dup() failed */
-                    "CGI cannot open temp file holding POST data: %s",
-                    zTmpNam);
-        }
-      }else if( nTmpBuf>0 ){
-        close(0);
-        if( dup(py[0])<0 ){
-          Malfunction(444, /* LOG: dup() failed */
-                    "CGI cannot dup() to file descriptor 0");
-        }
+      close(0);
+      if( dup(py[0])<0 ){
+        Malfunction(444, /* LOG: dup() failed */
+                  "CGI cannot dup() to file descriptor 0");
       }
 
       /* Close all surplus file descriptors */
@@ -2743,14 +2697,21 @@ void ProcessOneRequest(int forceClose, int socketId){
     in = fdopen(px[0], "rb");
 
     /* Set up the althttp-to-CGI pipe used to send POST data (if any) */
-    if( zTmpNam==0 ){
-      close(py[0]);
-      while( nTmpBuf>0 ){
-        ssize_t wrote = write(py[1], zTmpBuf, nTmpBuf);
-        if( wrote>0 ) nTmpBuf -= wrote;
+    close(py[0]);
+    if( nPostData>0 ){
+      ssize_t wrote = 0, n;
+      while( nPostData>wrote ){
+        n = write(py[1], zPostData+wrote, nPostData-wrote);
+        if( n<=0 ) break;
+        wrote += n;
       }
-      close(py[1]);
     }
+    if( zPostData ){
+       free(zPostData);
+       zPostData = 0;
+       nPostData = 0;
+    }
+    close(py[1]);
         
     /* Wait for the CGI program to reply and process that reply */
     if( in==0 ){
