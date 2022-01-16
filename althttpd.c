@@ -378,7 +378,6 @@ static void Malfunction(int errNo, const char *zFormat, ...);
 typedef struct TlsServerConn {
   SSL *ssl;          /* The SSL codec */
   BIO *bio;          /* SSL BIO object */
-  int atEof;         /* True when EOF reached. */
   int iSocket;       /* The socket */
 } TlsServerConn;
 
@@ -403,25 +402,24 @@ static struct TlsState {
 
 /*
 ** Read a single line of text from the client and stores it in zBuf
-** (which must be at least nBuf bytes long). At EOF it sets
-** tlsState.sslCon->atEof to non-0 and returns 0.  On error simply
-** returns 0. Once tlsState.sslCon->atEof is non-0, subsequent calls
-** to this function return 0 without reading anything.
+** (which must be at least nBuf bytes long). On error it
+** calls Malfunction().
 **
 ** If it reads anything, it returns zBuf.
 */
 static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
-  int n = 0;
+  int n = 0, err = 0;
   int i;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
-  if( pServer->atEof ) return 0;
+  if( BIO_eof(pServer->bio) ) return 0;
   for(i=0; i<nBuf-1; i++){
     n = SSL_read(pServer->ssl, &zBuf[i], 1);
-    if( n<=0 ){
-      pServer->atEof = 1;
-      return 0;
+    err = SSL_get_error(pServer->ssl, n);
+    if( err!=0 ){
+      Malfunction(500,"SSL read error.");
+    }else if( 0==n || zBuf[i]=='\n' ){
+      break;
     }
-    if( zBuf[i]=='\n' ) break;
   }
   zBuf[i+1] = 0;
   return zBuf;
@@ -441,16 +439,14 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   if( nBuf>0x7fffffff ){
     Malfunction(500,"SSL read too big");
   }
-  while( 0==err && nBuf!=rc && 0==pServer->atEof ){
+  while( 0==err && nBuf!=rc && 0==BIO_eof(pServer->bio) ){
     const int n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
     if( n==0 ){
-      pServer->atEof = 1;
       break;
     }
     err = SSL_get_error(pServer->ssl, n);
     if(0==err){
       rc += n;
-      pServer->atEof = BIO_eof(pServer->bio);
     }else{
       Malfunction(500,"SSL read error.");
     }
@@ -1644,7 +1640,6 @@ static void *tls_new_server(int iSocket){
   }
   assert(NULL!=tlsState.ctx);
   pServer->ssl = SSL_new(tlsState.ctx);
-  pServer->atEof = 0;
   pServer->bio = b;
   pServer->iSocket = iSocket;
   SSL_set_bio(pServer->ssl, b, b);
@@ -2564,7 +2559,6 @@ void ProcessOneRequest(int forceClose, int socketId){
             && access(zLine,R_OK)==0 ){
           zRealScript = StrDup(&zLine[j0]);
           Redirect(zRealScript, 302, 1, 370); /* LOG: redirect to not-found */
-          tls_close_conn();
           return;
         }else{
           j--;
@@ -2601,7 +2595,6 @@ void ProcessOneRequest(int forceClose, int socketId){
         ** none of the relative URLs in the delivered document will be
         ** correct. */
         Redirect(zRealScript,301,1,410); /* LOG: redirect to add trailing / */
-        tls_close_conn();
         return;
       }
       break;
