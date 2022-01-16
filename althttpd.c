@@ -300,7 +300,11 @@
 #endif
 
 #ifndef SERVER_SOFTWARE
-#  define SERVER_SOFTWARE "althttpd " ALTHTTPD_VERSION
+# ifdef ENABLE_TLS
+#  define SERVER_SOFTWARE "althttpd "ALTHTTPD_VERSION", "OPENSSL_VERSION_TEXT
+# else
+#  define SERVER_SOFTWARE "althttpd "ALTHTTPD_VERSION
+# endif
 #endif
 
 /*
