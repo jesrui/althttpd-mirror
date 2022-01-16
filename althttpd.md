@@ -84,30 +84,30 @@ sqlite.org that configures althttpd to server unencrypted
 HTTP requests on both IPv4 and IPv6.
 You can use this as a template to create your own installations.
 
->
-    service http
-    {
-      port = 80
-      flags = IPv4
-      socket_type = stream
-      wait = no
-      user = root
-      server = /usr/bin/althttpd
-      server_args = -logfile /logs/http.log -root /home/www -user www-data
-      bind = 45.33.6.223
-    }
->    
-    service http
-    {
-      port = 80
-      flags = REUSE IPv6
-      bind = 2600:3c00::f03c:91ff:fe96:b959
-      socket_type = stream
-      wait = no
-      user = root
-      server = /usr/bin/althttpd
-      server_args = -logfile /logs/http.log -root /home/www -user www-data
-    }
+> ~~~
+service http
+{
+  port = 80
+  flags = IPv4
+  socket_type = stream
+  wait = no
+  user = root
+  server = /usr/bin/althttpd
+  server_args = -logfile /logs/http.log -root /home/www -user www-data
+  bind = 45.33.6.223
+}
+service http
+{
+  port = 80
+  flags = REUSE IPv6
+  bind = 2600:3c00::f03c:91ff:fe96:b959
+  socket_type = stream
+  wait = no
+  user = root
+  server = /usr/bin/althttpd
+  server_args = -logfile /logs/http.log -root /home/www -user www-data
+}
+~~~
     
 
 The key observation here is that each incoming TCP/IP connection on 
@@ -186,24 +186,79 @@ match the name of the file.
 For content delivered as-is, the MIME-type is deduced from the filename
 extension using a table that is compiled into althttpd.
 
+Supporting HTTPS using Xinetd
+-----------------------------
+
+Beginning with version 2.0 (2022-01-16), althttpd optionally support
+TLS-encrypted connections.  Setting up an HTTPS website using Xinetd
+is very similar to an HTTP website.  The appropriate configuration for
+xinetd is a single file named "https" in the /etc/xinetd.d directory
+with content like the following:
+
+> ~~~
+service https
+{
+  port = 443
+  flags = IPv4
+  socket_type = stream
+  wait = no
+  user = root
+  server = /usr/bin/althttpd
+  server_args = -logfile /logs/http.log -root /home/www -user www-data -cert /etc/letsencrypt/live/sqlite.org/fullchain.pem -pkey /etc/letsencrypt/live/sqlite.org/privkey.pem
+  bind = 45.33.6.223
+}
+service https
+{
+  port = 443
+  flags = REUSE IPv6
+  bind = 2600:3c00::f03c:91ff:fe96:b959
+  socket_type = stream
+  wait = no
+  user = root
+  server = /usr/bin/althttpd
+  server_args = -logfile /logs/http.log -root /home/www -user www-data -cert /etc/letsencrypt/live/sqlite.org/fullchain.pem -pkey /etc/letsencrypt/live/sqlite.org/privkey.pem
+}
+~~~
+
+You will, of course, want to adjust pathnames and IP address so that they
+are appropriate for your particular installation.
+
+This https configuration file is the same as the previous http
+configuration file with just a few changes:
+
+   *   Change the service name from "http" to "https"
+   *   Change the port number from 80 to 443
+   *   Add -cert and -pkey options to althttpd so that it will know where
+       to find the appropriate certificate and private-key.
+
+After creating the new https configuration file, simply restart
+xinetd (usually with the command "`/etc/init.d/xinetd restart`") and
+immediately an HTTPS version of your existing website will spring into
+existance.
+
+
 Setup For HTTPS Using Stunnel4
 ------------------------------
 
-Althttpd itself does not do any encryption.
-To set up an encrypted website using althttpd, the recommended technique
-is to use [stunnel4](https://www.stunnel.org/).
+Older versions of althttpd did not support encryption.  The recommended
+way of encrypting website using althttpd was to
+use [stunnel4](https://www.stunnel.org/).  This advice has now changed.
+We now recommend that you update your althttpd to version 2.0 or later
+and use the xinetd technique described in the previous section.  This
+section is retained for historical reference.
 
 On the sqlite.org website, the relevant lines of the
 /etc/stunnel/stunnel.conf file are:
 
->
-    cert = /etc/letsencrypt/live/sqlite.org/fullchain.pem
-    key = /etc/letsencrypt/live/sqlite.org/privkey.pem
-    \[https\]
-    accept       = :::443
-    TIMEOUTclose = 0
-    exec         = /usr/bin/althttpd
-    execargs     = /usr/bin/althttpd -logfile /logs/http.log -root /home/www -user www-data -https 1
+> ~~~
+cert = /etc/letsencrypt/live/sqlite.org/fullchain.pem
+key = /etc/letsencrypt/live/sqlite.org/privkey.pem
+[https]
+accept       = :::443
+TIMEOUTclose = 0
+exec         = /usr/bin/althttpd
+execargs     = /usr/bin/althttpd -logfile /logs/http.log -root /home/www -user www-data -https 1
+~~~
 
 This setup is very similar to the xinetd setup.  One key difference is
 the "-https 1" option is used to tell althttpd that the connection is
@@ -223,8 +278,9 @@ named ~/www/default.website.  That subdirectory contains a collection of
 files and CGI scripts.  Althttpd can serve the content there by running
 the following command:
 
->
-    althttpd -root ~/www -port 8080
+> ~~~
+althttpd -root ~/www -port 8080
+~~~
 
 The "-port 8080" option is what tells althttpd to run in stand-alone
 mode, listening on port 8080.
@@ -239,8 +295,9 @@ Stand-alone with HTTPS
 If althttpd is built with TLS support then it can be told to operate
 in HTTPS mode with one of the following options:
 
->
-    althttpd -root ~/www --port 8043 --cert builtin
+> ~~~
+althttpd -root ~/www --port 8043 --cert builtin
+~~~
 
 this option uses a compiled-in self-signed SSL certificate
 **which is wildly insecure** and is intended for testing purposes
@@ -253,8 +310,9 @@ option can point to the privkey.pem file.
 
 Using your own certificate:
 
->
-    althttpd -root ~/www --port 8043 --cert fullchain.pem --pkey privkey.pem
+> ~~~
+althttpd -root ~/www --port 8043 --cert fullchain.pem --pkey privkey.pem
+~~~
 
 Note that the certificate is read before althttpd drops root
 privileges, so the certificate may live somewhere inaccessible to
