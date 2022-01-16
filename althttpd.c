@@ -300,11 +300,14 @@
 #endif
 
 #ifndef SERVER_SOFTWARE
-# ifdef ENABLE_TLS
-#  define SERVER_SOFTWARE "althttpd "ALTHTTPD_VERSION", "OPENSSL_VERSION_TEXT
-# else
-#  define SERVER_SOFTWARE "althttpd "ALTHTTPD_VERSION
-# endif
+#  define SERVER_SOFTWARE "althttpd " ALTHTTPD_VERSION
+#endif
+#ifndef SERVER_SOFTWARE_TLS
+#  ifdef ENABLE_TLS
+#    define SERVER_SOFTWARE_TLS SERVER_SOFTWARE ", " OPENSSL_VERSION_TEXT
+#  else
+#    define SERVER_SOFTWARE_TLS SERVER_SOFTWARE
+#  endif
 #endif
 
 /*
@@ -2978,7 +2981,7 @@ int main(int argc, const char **argv){
     }
 #endif
     else if( strcmp(z, "-version")==0 ){
-      puts(SERVER_SOFTWARE);
+      puts(SERVER_SOFTWARE_TLS);
       return 0;
     }else if( strcmp(z, "-datetest")==0 ){
       TestParseRfc822Date();
@@ -3087,7 +3090,7 @@ int main(int argc, const char **argv){
   ){
     zRemoteAddr += 7;
   }
-  zServerSoftware = SERVER_SOFTWARE;
+  zServerSoftware = useHttps==2 ? SERVER_SOFTWARE_TLS : SERVER_SOFTWARE;
   /* Process the input stream */
   for(i=0; i<100; i++){
     ProcessOneRequest(0, httpConnection);
