@@ -5,11 +5,11 @@ Althttpd is a simple webserver that has run the <https://sqlite.org/> website
 since 2004.  Althttpd strives for simplicity, security, and low resource
 usage.
 
-As of 2018, the althttpd instance for sqlite.org answers
+As of 2022, the althttpd instance for sqlite.org answers
 about 500,000 HTTP requests per day (about 5 or 6 per second)
-delivering about 50GB of content per day (about 4.6 megabits/second) 
+delivering about 200GB of content per day (about 18 megabits/second) 
 on a $40/month [Linode](https://www.linode.com/pricing).  The load 
-average on this machine normally stays around 0.1 or 0.2.  About 19%
+average on this machine normally stays around 0.5.  About 10%
 of the HTTP requests are CGI to various [Fossil](https://fossil-scm.org/)
 source-code repositories.
 
@@ -18,9 +18,9 @@ Design Philosophy
 
 Althttpd is usually launched from 
 [xinetd](https://en.wikipedia.org/wiki/Xinetd) or
-[stunnel4](https://www.stunnel.org/). A separate process
-is started for each incoming connection, and that process is
-wholly focused on serving that one connection.  A single althttpd
+similar. A separate process is started for each incoming
+connection, and that process is wholly focused on serving that
+one connection.  A single althttpd
 process will handle one or more HTTP requests over the same connection.
 When the connection closes, the althttpd process exits.
 
@@ -30,7 +30,7 @@ incoming HTTPS requests), then forks
 a copy of itself to handle each inbound connection.  Each connection
 is still handled using a separate process.  The only difference is
 that the connection-handler process is now started by a master
-althttpd instance rather than by xinetd or stunnel4.
+althttpd instance rather than by xinetd.
 
 Althttpd has no configuration file. All configuration is handled
 using a few command-line arguments. This helps to keep the

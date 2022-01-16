@@ -56,11 +56,11 @@
 **        a defense against cross-site scripting attacks and other mischief.
 **
 **    (5) Executable files are run as CGI.  Files whose name ends with ".scgi"
-**        trigger an SCGI request (see item 10 below).  All other files
+**        trigger an SCGI request (see item 9 below).  All other files
 **        are delivered as is.
 **
 **    (6) If a file named "-auth" exists in the same directory as the file to
-**        be run as CGI or to be delivered, then it contains information
+**        be run as CGI/SCGI or to be delivered, then it contains information
 **        for HTTP Basic authorization.  See file format details below.
 **
 **    (7) To run as a stand-alone server, simply add the "-port N" command-line
@@ -107,7 +107,7 @@
 **
 **  --https BOOLEAN  Indicates that input is coming over SSL and is being
 **                   decoded upstream, perhaps by stunnel. This option
-**                   does *not* activate built-in TLS support.  Use --tls
+**                   does *not* activate built-in TLS support.  Use --cert
 **                   for that.
 **
 **  --family ipv4    Only accept input from IPV4 or IPV6, respectively.
@@ -368,6 +368,7 @@ static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
+/* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
 
 #ifdef ENABLE_TLS
@@ -384,7 +385,7 @@ typedef struct TlsServerConn {
 /*
 ** There can only be a single OpenSSL IO connection open at a time.
 ** State information about that IO is stored in the following
-** local variables:
+** global singleton:
 */
 static struct TlsState {
   int isInit;             /* 0: uninit 1: init as client 2: init as server */
@@ -491,10 +492,9 @@ static int althttpd_vprintf(char const * fmt, va_list va){
   if( useHttps!=2 || NULL==tlsState.sslCon ){
     return vprintf(fmt, va);
   }else{
-    enum { PF_BUFFER_SIZE = 1024 * 2 };
-    static char pfBuffer[PF_BUFFER_SIZE] = {0};
-    const int sz = vsnprintf(pfBuffer, PF_BUFFER_SIZE, fmt, va);
-    if( sz<PF_BUFFER_SIZE ){
+    char pfBuffer[10000];
+    const int sz = vsnprintf(pfBuffer, sizeof(pfBuffer), fmt, va);
+    if( sz<(int)sizeof(pfBuffer) ){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
       Malfunction(500,"Output buffer is too small. Wanted %d bytes.",
