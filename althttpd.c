@@ -296,7 +296,7 @@
 #endif
 
 #ifndef ALTHTTPD_VERSION
-#define ALTHTTPD_VERSION "?version?"
+#define ALTHTTPD_VERSION "2.0"
 #endif
 
 #ifndef SERVER_SOFTWARE
@@ -3083,7 +3083,7 @@ int main(int argc, const char **argv){
   ){
     zRemoteAddr += 7;
   }
-  zServerSoftware = StrDup(SERVER_SOFTWARE);
+  zServerSoftware = SERVER_SOFTWARE;
   /* Process the input stream */
   for(i=0; i<100; i++){
     ProcessOneRequest(0, httpConnection);
