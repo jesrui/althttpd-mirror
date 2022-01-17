@@ -1203,8 +1203,8 @@ end_of_upkfm:
 ** zCertFile is assumed to be a concatenation of the certificate and
 ** the private-key in the PEM format.
 **
-** If zCertFile is "builtin" then a built-in self-signed cert is
-** used and zKeyFile is ignored.
+** If zCertFile is "unsafe-builtin" then a built-in self-signed cert
+** is used and zKeyFile is ignored.
 **
 ** Error messages may contain the paths to the given files, but this
 ** function is called before the server starts listening for requests,
@@ -1214,7 +1214,7 @@ static void ssl_init_server(const char *zCertFile,
                             const char *zKeyFile){
   if( tlsState.isInit==0 ){
     const int useSelfSigned = zCertFile
-      && 0==strcmp("builtin", zCertFile);
+      && 0==strcmp("unsafe-builtin", zCertFile);
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();

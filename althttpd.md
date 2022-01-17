@@ -296,7 +296,7 @@ If althttpd is built with TLS support then it can be told to operate
 in HTTPS mode with one of the following options:
 
 > ~~~
-althttpd -root ~/www --port 8043 --cert builtin
+althttpd -root ~/www --port 8043 --cert unsafe-builtin
 ~~~
 
 this option uses a compiled-in self-signed SSL certificate
