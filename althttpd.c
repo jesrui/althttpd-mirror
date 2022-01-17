@@ -380,7 +380,7 @@ static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 static char * addHSTS = 0;       /* Value for the Strict-Transport-Security
-                                 ** response header's max-age (HTTP only) */
+                                 ** response header's max-age. */
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -887,7 +887,7 @@ static void StartResponse(const char *zResultCode){
   }else{
     nOut += althttpd_printf("Connection: keep-alive\r\n");
   }
-  if( !useHttps && addHSTS ){
+  if( useHttps>0 && addHSTS ){
     nOut += althttpd_printf("Strict-Transport-Security: "
                             "max-age=%s\r\n", addHSTS);
   }
