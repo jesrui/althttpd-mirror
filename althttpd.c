@@ -247,6 +247,11 @@
 **       authorization credentials are provided, and if so sets the
 **       REMOTE_USER to NAME.
 **    *  "realm TEXT" sets the realm to TEXT.
+**    *  "strict-transport-security" sets, in HTTP mode, the
+**       Strict-Transport-Security header on the response. Any value part
+**       after the key is assumed to be the max-age value (time in seconds)
+**       optionally followed by "; includeSubdomains". If no value is
+**       set then a default is used and includeSubdomains is not implied.
 **
 ** There can be multiple "user" lines.  If no "user" line matches, the
 ** request fails with a 401 error.
@@ -374,6 +379,8 @@ static char *zScgi = 0;          /* Value of the SCGI env variable */
 static int rangeStart = 0;       /* Start of a Range: request */
 static int rangeEnd = 0;         /* End of a Range: request */
 static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
+static char * addHSTS = 0;       /* Value for the Strict-Transport-Security
+                                 ** response header's max-age (HTTP only) */
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
@@ -880,6 +887,10 @@ static void StartResponse(const char *zResultCode){
   }else{
     nOut += althttpd_printf("Connection: keep-alive\r\n");
   }
+  if( !useHttps && addHSTS ){
+    nOut += althttpd_printf("Strict-Transport-Security: "
+                            "max-age=%s\r\n", addHSTS);
+  }
   nOut += DateTag("Date", now);
   statusSent = 1;
 }
@@ -1319,6 +1330,14 @@ static int CheckBasicAuthorization(const char *zAuthFile){
         Redirect(zScript, 301, 1, 170); /* LOG: -auth redirect */
         fclose(in);
         return 0;
+      }
+    }else if( strcmp(zFieldName,"strict-transport-security")==0 ){
+      while( zVal && isblank(*zVal) ) ++zVal;
+      if(zVal && *zVal && '\n'!=*zVal){
+        addHSTS = StrDup(zVal);
+      }else{
+        /* Two years is preferred default, per Mozilla docs */
+        addHSTS = StrDup("63072000");
       }
     }else if( strcmp(zFieldName,"anyone")==0 ){
       fclose(in);

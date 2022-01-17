@@ -361,6 +361,19 @@ Other lines have meaning as follows:
      are allowed.  Any HTTP request results in a 404 Not Found error.
      The https-only line normally occurs after an http-redirect line.
 
+  *  <b>strict-transport-security</b> <i>SECONDS...</i>
+
+     In HTTP mode (but not HTTPS), a single line of this form adds the
+     Strict-Transport-Security response header. Its value is the
+     header's _max-age_ value (time in seconds) plus any optional
+     semicolon-delimited flags for the header. e.g. _31536000;
+     includeSubdomains_. If no value is set, a default time is used
+     and no optional flags are set. Note that this must come _before_
+     an "anyone" entry (see below). If this would ostensibly be the
+     only directive in the file then it must be followed by an
+     "anyone" line or else authentication is considered to have
+     failed.
+
   *  <b>realm</b> <i>NAME</i>
 
      A single line of this form establishes the "realm" for basic
@@ -384,7 +397,8 @@ Other lines have meaning as follows:
      allowed, even if there is no username and password provided.
      This line is useful in combination with "http-redirect" to cause
      all ordinary HTTP requests to redirect to HTTPS without requiring
-     login credentials.
+     login credentials. This line, if set, must come _after_ any others,
+     as all following lines are ignored.
 
 Basic Authentication Examples
 -----------------------------
