@@ -20,5 +20,11 @@ althttpd:	althttpd.c manifest Makefile
 althttpsd:	althttpd.c manifest Makefile
 	cc $(CPPFLAGS) -Os -Wall -Wextra -fPIC -o althttpsd -DENABLE_TLS althttpd.c -lssl -lcrypto
 
+static-althttpd:	althttpd.c manifest Makefile
+	cc $(CPPFLAGS) -Os -Wall -Wextra -static -o althttpd althttpd.c
+
+static-althttpsd:	althttpd.c manifest Makefile
+	cc $(CPPFLAGS) -Os -Wall -Wextra -static -fPIC -o althttpsd -DENABLE_TLS althttpd.c -lssl -lcrypto -lpthread -ldl
+
 clean:	
 	rm -f althttpd althttpsd
