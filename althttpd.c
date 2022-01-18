@@ -3023,6 +3023,10 @@ int main(int argc, const char **argv){
 
   /* Get information about the user if available */
   if( zPermUser ) pwd = getpwnam(zPermUser);
+  else if( getuid()==0 ){
+    Malfunction(590, "Cannot run as root. Use the -user USER flag.");
+    return 1;
+  }
 
   /* Enter the chroot jail if requested */  
   if( zPermUser && useChrootJail && getuid()==0 ){
