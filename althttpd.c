@@ -424,7 +424,7 @@ static char *tls_gets(void *pServerArg, char *zBuf, int nBuf){
     n = SSL_read(pServer->ssl, &zBuf[i], 1);
     err = SSL_get_error(pServer->ssl, n);
     if( err!=0 ){
-      Malfunction(500,"SSL read error.");
+      Malfunction(525,"SSL read error.");
     }else if( 0==n || zBuf[i]=='\n' ){
       break;
     }
@@ -445,7 +445,7 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   size_t rc = 0;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf>0x7fffffff ){
-    Malfunction(500,"SSL read too big");
+    Malfunction(526,"SSL read too big");
   }
   while( 0==err && nBuf!=rc && 0==BIO_eof(pServer->bio) ){
     const int n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
@@ -456,7 +456,7 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
     if(0==err){
       rc += n;
     }else{
-      Malfunction(500,"SSL read error.");
+      Malfunction(527,"SSL read error.");
     }
   }
   return rc;
@@ -471,7 +471,7 @@ static int tls_write_server(void *pServerArg, void const *zBuf,  size_t nBuf){
   int n;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf<=0 ) return 0;
-  if( nBuf>0x7fffffff ){ Malfunction(500,"SSL write too big"); }
+  if( nBuf>0x7fffffff ){ Malfunction(528,"SSL write too big"); }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
     /* Do NOT call Malfunction() from here, as Malfunction()
@@ -504,7 +504,7 @@ static int althttpd_vprintf(char const * fmt, va_list va){
     if( sz<(int)sizeof(pfBuffer) ){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
-      Malfunction(500,"Output buffer is too small. Wanted %d bytes.",
+      Malfunction(529,"Output buffer is too small. Wanted %d bytes.",
                   sz);
       return 0;
     }
@@ -1221,32 +1221,32 @@ static void ssl_init_server(const char *zCertFile,
     tlsState.ctx = SSL_CTX_new(SSLv23_server_method());
     if( tlsState.ctx==0 ){
       ERR_print_errors_fp(stderr);
-      Malfunction(500,"Error initializing the SSL server");
+      Malfunction(501,"Error initializing the SSL server");
     }
     if( !useSelfSigned && zCertFile && zCertFile[0] ){
       if( SSL_CTX_use_certificate_chain_file(tlsState.ctx,
                                              zCertFile)!=1 ){
         ERR_print_errors_fp(stderr);
-        Malfunction(500,"Error loading CERT file \"%s\"",
+        Malfunction(502,"Error loading CERT file \"%s\"",
                     zCertFile);
       }
       if( zKeyFile==0 ) zKeyFile = zCertFile;
       if( SSL_CTX_use_PrivateKey_file(tlsState.ctx, zKeyFile,
                                       SSL_FILETYPE_PEM)<=0 ){
         ERR_print_errors_fp(stderr);
-        Malfunction(500,"Error loading PRIVATE KEY from file \"%s\"",
+        Malfunction(503,"Error loading PRIVATE KEY from file \"%s\"",
                     zKeyFile);
       }
     }else if( useSelfSigned ){
       if(sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
          || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
-        Malfunction(500,"Error loading self-signed CERT");
+        Malfunction(504,"Error loading self-signed CERT");
       }
     }else{
-      Malfunction(500,"No certificate TLS specified");
+      Malfunction(505,"No certificate TLS specified");
     }
     if( !SSL_CTX_check_private_key(tlsState.ctx) ){
-      Malfunction(500,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
+      Malfunction(506,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
            zKeyFile, zCertFile);
     }
     SSL_CTX_set_mode(tlsState.ctx, SSL_MODE_AUTO_RETRY);
@@ -1643,7 +1643,7 @@ static void *tls_new_server(int iSocket){
   TlsServerConn *pServer = malloc(sizeof(*pServer));
   BIO *b = pServer ? BIO_new_socket(iSocket, 0) : NULL;
   if( NULL==b ){
-    Malfunction(500,"Cannot allocate TlsServerConn.");
+    Malfunction(507,"Cannot allocate TlsServerConn.");
   }
   assert(NULL!=tlsState.ctx);
   pServer->ssl = SSL_new(tlsState.ctx);
@@ -1691,7 +1691,7 @@ static char *althttpd_fgets(char *s, int size, FILE *in){
   assert(NULL!=tlsState.sslCon);
   return tls_gets(tlsState.sslCon, s, size);
 #else
-  Malfunction(500,"SSL not available");
+  Malfunction(508,"SSL not available");
   return NULL;
 #endif
 }
@@ -1708,7 +1708,7 @@ static size_t althttpd_fread(void *tgt, size_t sz, size_t nmemb, FILE *in){
   assert(NULL!=tlsState.sslCon);
   return tls_read_server(tlsState.sslCon, tgt, sz*nmemb);
 #else
-  Malfunction(500,"SSL not available");
+  Malfunction(509,"SSL not available");
   return 0;
 #endif
 }
@@ -1732,7 +1732,7 @@ static size_t althttpd_fwrite(
   assert(NULL!=tlsState.sslCon);
   return tls_write_server(tlsState.sslCon, src, sz*nmemb);
 #else
-  Malfunction(500,"SSL not available");
+  Malfunction(510,"SSL not available");
   return 0;
 #endif
 }
@@ -2148,7 +2148,7 @@ static int tls_init_conn(int iSocket){
     if( NULL==tlsState.sslCon ){
       tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
       if( NULL==tlsState.sslCon ){
-        Malfunction(500,"Could not instantiate TLS context.");
+        Malfunction(512,"Could not instantiate TLS context.");
       }
       atexit(tls_atexit);
     }
@@ -2949,7 +2949,7 @@ int main(int argc, const char **argv){
       }else if( strcmp(zArg, "ipv6")==0 ){
         ipv6Only = 1;
       }else{
-        Malfunction(500,  /* LOG: unknown IP protocol */
+        Malfunction(513,  /* LOG: unknown IP protocol */
                     "unknown IP protocol: [%s]\n", zArg);
       }
     }else if( strcmp(z, "-jail")==0 ){
@@ -2962,7 +2962,7 @@ int main(int argc, const char **argv){
       }
     }else if( strcmp(z, "-input")==0 ){
       if( freopen(zArg, "rb", stdin)==0 || stdin==0 ){
-        Malfunction(501, /* LOG: cannot open --input file */
+        Malfunction(514, /* LOG: cannot open --input file */
                     "cannot open --input file \"%s\"\n", zArg);
       }
     }
@@ -2988,7 +2988,7 @@ int main(int argc, const char **argv){
       printf("Ok\n");
       exit(0);
     }else{
-      Malfunction(510, /* LOG: unknown command-line argument on launch */
+      Malfunction(515, /* LOG: unknown command-line argument on launch */
                   "unknown argument: [%s]\n", z);
     }
     argv += 2;
@@ -2998,7 +2998,7 @@ int main(int argc, const char **argv){
     if( standalone ){
       zRoot = ".";
     }else{
-      Malfunction(520, /* LOG: --root argument missing */
+      Malfunction(516, /* LOG: --root argument missing */
                   "no --root specified");
     }
   }
@@ -3017,21 +3017,21 @@ int main(int argc, const char **argv){
   ** create a chroot jail there.
   */
   if( chdir(zRoot)!=0 ){
-    Malfunction(530, /* LOG: chdir() failed */
+    Malfunction(517, /* LOG: chdir() failed */
                 "cannot change to directory [%s]", zRoot);
   }
 
   /* Get information about the user if available */
   if( zPermUser ) pwd = getpwnam(zPermUser);
   else if( getuid()==0 ){
-    Malfunction(590, "Cannot run as root. Use the -user USER flag.");
+    Malfunction(518, "Cannot run as root. Use the -user USER flag.");
     return 1;
   }
 
   /* Enter the chroot jail if requested */  
   if( zPermUser && useChrootJail && getuid()==0 ){
     if( chroot(".")<0 ){
-      Malfunction(540, /* LOG: chroot() failed */
+      Malfunction(519, /* LOG: chroot() failed */
                   "unable to create chroot jail");
     }else{
       zRoot = "";
@@ -3040,7 +3040,7 @@ int main(int argc, const char **argv){
 
   /* Activate the server, if requested */
   if( zPort && http_server(zPort, 0, &httpConnection) ){
-    Malfunction(550, /* LOG: server startup failed */
+    Malfunction(520, /* LOG: server startup failed */
                 "failed to start server");
   }
 
@@ -3058,20 +3058,20 @@ int main(int argc, const char **argv){
   if( zPermUser ){
     if( pwd ){
       if( setgid(pwd->pw_gid) ){
-        Malfunction(560, /* LOG: setgid() failed */
+        Malfunction(521, /* LOG: setgid() failed */
                     "cannot set group-id to %d", pwd->pw_gid);
       }
       if( setuid(pwd->pw_uid) ){
-        Malfunction(570, /* LOG: setuid() failed */
+        Malfunction(522, /* LOG: setuid() failed */
                     "cannot set user-id to %d", pwd->pw_uid);
       }
     }else{
-      Malfunction(580, /* LOG: unknown user */
+      Malfunction(523, /* LOG: unknown user */
                   "no such user [%s]", zPermUser);
     }
   }
   if( getuid()==0 ){
-    Malfunction(590, /* LOG: cannot run as root */
+    Malfunction(524, /* LOG: cannot run as root */
                 "cannot run as root");
   }
 
