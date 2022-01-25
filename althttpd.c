@@ -2217,6 +2217,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   /* Get the first line of the request and parse out the
   ** method, the script and the protocol.
   */
+  omitLog = 1;
   if( althttpd_fgets(zLine,sizeof(zLine),stdin)==0 ){
     exit(0);
   }
