@@ -2291,6 +2291,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   zReferer = 0;
   zIfNoneMatch = 0;
   zIfModifiedSince = 0;
+  zContentLength = 0;
   rangeEnd = 0;
   while( althttpd_fgets(zLine,sizeof(zLine),stdin) ){
     char *zFieldName;
