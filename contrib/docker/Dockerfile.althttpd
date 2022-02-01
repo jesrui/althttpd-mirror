@@ -1,6 +1,5 @@
 ########################################################################
-# Builds a static fossil SCM binary from the latest trunk
-# source code.
+# Builds a static althttpd binary from the latest trunk source code.
 # Optional --build-arg entries:
 #    repoUrl=source repo URL (default=canonical tree)
 #    version=tag or version to pull (default=trunk)
@@ -12,10 +11,7 @@ ARG repoUrl=https://sqlite.org/althttpd
 ARG version=trunk
 # --build-arg cachebust=x is a cache buster :/
 ARG cachebust=0
-# FROM    alpine:edge
-# >3.13 breaks stuff unduly:
-# https://wiki.alpinelinux.org/wiki/Draft_Release_Notes_for_Alpine_3.14.0#faccessat2
-FROM    alpine:3.13
+FROM    alpine:edge
 
 RUN apk update && apk upgrade                  \
     && apk add --no-cache                      \
