@@ -323,6 +323,7 @@ static char *zMethod = 0;        /* The method.  Must be GET */
 static char *zScript = 0;        /* The object to retrieve */
 static char *zRealScript = 0;    /* The object to retrieve.  Same as zScript
                                  ** except might have "/index.html" appended */
+static char *zRequestUri = 0;    /* Sanitized request uri */
 static char *zHome = 0;          /* The directory containing content */
 static char *zQueryString = 0;   /* The query string on the end of the name */
 static char *zFile = 0;          /* The filename of the object to retrieve */
@@ -555,7 +556,7 @@ static struct {
   { "QUERY_STRING",             &zQueryString },
   { "REMOTE_ADDR",              &zRemoteAddr },
   { "REQUEST_METHOD",           &zMethod },
-  { "REQUEST_URI",              &zScript },
+  { "REQUEST_URI",              &zRequestUri },
   { "REMOTE_USER",              &zRemoteUser },
   { "SCGI",                     &zScgi },
   { "SCRIPT_DIRECTORY",         &zDir },
@@ -774,6 +775,23 @@ static char *StrAppend(char *zPrior, const char *zSep, const char *zSrc){
   memcpy(&zDest[n0],zSep,n1);
   memcpy(&zDest[n0+n1],zSrc,n2+1);
   return zDest;
+}
+
+/*
+** Construct the REQUEST_URI value from zString and zQueryString.
+**
+** REQUEST_URI is nominally the second field of the first line of the
+** HTTP request.  But we might have done some sanitization on the
+** SCRIPT_NAME and/or PATH_INFO and we want to capture that in the
+** REQUEST_URI.  Hence, the REQUEST_URI is recomputed before being
+** sent to CGI or SCGI.
+*/
+static void ComputeRequestUri(void){
+  if( zQueryString==0 || zQueryString[0]==0 ){
+    zRequestUri = zScript;
+  }else{
+    zRequestUri = StrAppend(zScript, "?", zQueryString);
+  }
 }
 
 /*
@@ -2097,6 +2115,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   nHdrAlloc = 0;
   zHdr = 0;
   if( zContentLength==0 ) zContentLength = "0";
+  ComputeRequestUri();
   zScgi = "1";
   for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
     int n1, n2;
@@ -2689,6 +2708,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       }
 
       /* Setup the CGI environment appropriately. */
+      ComputeRequestUri();
       putenv("GATEWAY_INTERFACE=CGI/1.0");
       for(i=0; i<(int)(sizeof(cgienv)/sizeof(cgienv[0])); i++){
         if( *cgienv[i].pzEnvValue ){
