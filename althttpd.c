@@ -2483,7 +2483,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
 
   /* Make sure the running time is not too great */
-  if( useTimeout ) alarm(10);
+  if( useTimeout ) alarm(30);
 
   /* Convert all unusual characters in the script name into "_".
   **
@@ -2650,6 +2650,10 @@ void ProcessOneRequest(int forceClose, int socketId){
     return;
   }
 
+  /* After parsing a single successful request.  Disable subsequent timeouts */
+  alarm(0);
+  useTimeout = 0;
+
   /* Take appropriate action
   */
   if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){ /* CGI */
@@ -2771,11 +2775,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
   althttpd_fflush(stdout);
   MakeLogEntry(0, 0);  /* LOG: Normal reply */
-
-  /* The next request must arrive within 30 seconds or we close the connection
-  */
   omitLog = 1;
-  if( useTimeout ) alarm(30);
 }
 
 #define MAX_PARALLEL 50  /* Number of simultaneous children */
