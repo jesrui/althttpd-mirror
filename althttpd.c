@@ -2214,6 +2214,10 @@ void ProcessOneRequest(int forceClose, int socketId){
 #endif
   char zLine[1000];         /* A buffer for input lines or forming names */
 
+
+  /* Must a header within 10 seconds */
+  if( useTimeout ) alarm(10);
+
   /* Change directories to the root of the HTTP filesystem
   */
   if( chdir(zRoot[0] ? zRoot : "/")!=0 ){
@@ -2224,14 +2228,6 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
   nRequest++;
   tls_init_conn(socketId);
-  /*
-  ** We must receive a complete header within 15 seconds
-  */
-  signal(SIGALRM, Timeout);
-  signal(SIGSEGV, Timeout);
-  signal(SIGPIPE, Timeout);
-  signal(SIGXCPU, Timeout);
-  if( useTimeout ) alarm(15);
 
   /* Get the first line of the request and parse out the
   ** method, the script and the protocol.
@@ -3026,6 +3022,15 @@ int main(int argc, const char **argv){
                   "no --root specified");
     }
   }
+
+  /*
+  ** 10 seconds to get started
+  */
+  signal(SIGALRM, Timeout);
+  signal(SIGSEGV, Timeout);
+  signal(SIGPIPE, Timeout);
+  signal(SIGXCPU, Timeout);
+  if( useTimeout ) alarm(10);
 
 #if ENABLE_TLS
   /* We "need" to read the cert before chroot'ing to allow that the
