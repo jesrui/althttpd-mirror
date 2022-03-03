@@ -2650,8 +2650,10 @@ void ProcessOneRequest(int forceClose, int socketId){
     return;
   }
 
-  /* After parsing a single successful request.  Disable subsequent timeouts */
-  alarm(0);
+  /* After parsing a single successful request.  Disable subsequent timeouts.
+  ** Except, provide one timeout at 4 hours to prevent a permanently hung
+  ** process. */
+  alarm(60*60*4);  /* Timeout after 4 hours */
   useTimeout = 0;
 
   /* Take appropriate action
