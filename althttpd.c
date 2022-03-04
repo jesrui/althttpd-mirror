@@ -364,6 +364,7 @@ static int omitLog = 0;          /* Do not make logfile entries if true */
 static int useHttps = 0;         /* 0=HTTP, 1=external HTTPS (stunnel),
                                  ** 2=builtin TLS support */
 static int useTimeout = 1;       /* True to use times */
+static int nTimeoutLine = 0;     /* Line number where timeout was set */
 static int standalone = 0;       /* Run as a standalone server (no inetd) */
 static int ipv6Only = 0;         /* Use IPv6 only */
 static int ipv4Only = 0;         /* Use IPv4 only */
@@ -446,7 +447,7 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
   size_t rc = 0;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf>0x7fffffff ){
-    Malfunction(526,"SSL read too big");
+    Malfunction(526,"SSL read too big"); /* LOG: SSL read too big */
   }
   while( 0==err && nBuf!=rc && 0==BIO_eof(pServer->bio) ){
     const int n = SSL_read(pServer->ssl, zBuf + rc, (int)(nBuf - rc));
@@ -457,7 +458,7 @@ static size_t tls_read_server(void *pServerArg, void *zBuf, size_t nBuf){
     if(0==err){
       rc += n;
     }else{
-      Malfunction(527,"SSL read error.");
+      Malfunction(527,"SSL read error."); /* LOG: SSL read error */
     }
   }
   return rc;
@@ -472,7 +473,9 @@ static int tls_write_server(void *pServerArg, void const *zBuf,  size_t nBuf){
   int n;
   TlsServerConn * const pServer = (TlsServerConn*)pServerArg;
   if( nBuf<=0 ) return 0;
-  if( nBuf>0x7fffffff ){ Malfunction(528,"SSL write too big"); }
+  if( nBuf>0x7fffffff ){
+    Malfunction(528,"SSL write too big"); /* LOG: SSL write too big */
+  }
   n = SSL_write(pServer->ssl, zBuf, (int)nBuf);
   if( n<=0 ){
     /* Do NOT call Malfunction() from here, as Malfunction()
@@ -505,8 +508,8 @@ static int althttpd_vprintf(char const * fmt, va_list va){
     if( sz<(int)sizeof(pfBuffer) ){
       return (int)tls_write_server(tlsState.sslCon, pfBuffer, sz);
     }else{
-      Malfunction(529,"Output buffer is too small. Wanted %d bytes.",
-                  sz);
+      Malfunction(529, /* LOG: Output buffer too small */
+         "Output buffer is too small. Wanted %d bytes.", sz);
       return 0;
     }
   }
@@ -967,6 +970,16 @@ static void CgiError(void){
 }
 
 /*
+** Set the timeout in seconds.  0 means no-timeout.
+*/
+static void SetTimeout(int nSec, int lineNum){
+  if( useTimeout ){
+    nTimeoutLine = lineNum;
+    alarm(nSec);
+  }
+}
+
+/*
 ** This is called if we timeout or catch some other kind of signal.
 ** Log an error code which is 900+iSig and then quit.
 */
@@ -979,7 +992,23 @@ static void Timeout(int iSig){
       zBuf[2] = '0' + iSig%10;
       zBuf[3] = 0;
       strcpy(zReplyStatus, zBuf);
-      MakeLogEntry(0, 130);  /* LOG: Timeout */
+      switch( iSig ){
+        case SIGALRM:
+          MakeLogEntry(0, nTimeoutLine);
+          break;
+        case SIGSEGV:
+          MakeLogEntry(0, 131);  /* LOG: SIGSEGV */
+          break;
+        case SIGPIPE:
+          MakeLogEntry(0, 132);  /* LOG: SIGPIPE */
+          break;
+        case SIGXCPU:
+          MakeLogEntry(0, 133);  /* LOG: SIGXCPU */
+          break;
+        default:
+          MakeLogEntry(0, 139);  /* LOG: Unknown signal */
+          break;
+      }
     }
     exit(0);
   }
@@ -1239,32 +1268,36 @@ static void ssl_init_server(const char *zCertFile,
     tlsState.ctx = SSL_CTX_new(SSLv23_server_method());
     if( tlsState.ctx==0 ){
       ERR_print_errors_fp(stderr);
-      Malfunction(501,"Error initializing the SSL server");
+      Malfunction(501,   /* LOG: Error initializing the SSL Server */
+           "Error initializing the SSL server");
     }
     if( !useSelfSigned && zCertFile && zCertFile[0] ){
       if( SSL_CTX_use_certificate_chain_file(tlsState.ctx,
                                              zCertFile)!=1 ){
         ERR_print_errors_fp(stderr);
-        Malfunction(502,"Error loading CERT file \"%s\"",
-                    zCertFile);
+        Malfunction(502,  /* LOG: Error loading CERT file */
+           "Error loading CERT file \"%s\"", zCertFile);
       }
       if( zKeyFile==0 ) zKeyFile = zCertFile;
       if( SSL_CTX_use_PrivateKey_file(tlsState.ctx, zKeyFile,
                                       SSL_FILETYPE_PEM)<=0 ){
         ERR_print_errors_fp(stderr);
-        Malfunction(503,"Error loading PRIVATE KEY from file \"%s\"",
-                    zKeyFile);
+        Malfunction(503,  /* LOG: Error loading private key file */
+            "Error loading PRIVATE KEY from file \"%s\"",
+            zKeyFile);
       }
     }else if( useSelfSigned ){
       if(sslctx_use_cert_from_mem(tlsState.ctx, sslSelfCert, -1)
          || sslctx_use_pkey_from_mem(tlsState.ctx, sslSelfPKey, -1) ){
-        Malfunction(504,"Error loading self-signed CERT");
+        Malfunction(504,  /* LOG: Error loading self-signed cert */
+           "Error loading self-signed CERT");
       }
     }else{
-      Malfunction(505,"No certificate TLS specified");
+      Malfunction(505,"No certificate TLS specified"); /* LOG: No cert */
     }
     if( !SSL_CTX_check_private_key(tlsState.ctx) ){
-      Malfunction(506,"PRIVATE KEY \"%s\" does not match CERT \"%s\"",
+      Malfunction(506,  /* LOG: private key does not match cert */
+           "PRIVATE KEY \"%s\" does not match CERT \"%s\"",
            zKeyFile, zCertFile);
     }
     SSL_CTX_set_mode(tlsState.ctx, SSL_MODE_AUTO_RETRY);
@@ -1661,7 +1694,7 @@ static void *tls_new_server(int iSocket){
   TlsServerConn *pServer = malloc(sizeof(*pServer));
   BIO *b = pServer ? BIO_new_socket(iSocket, 0) : NULL;
   if( NULL==b ){
-    Malfunction(507,"Cannot allocate TlsServerConn.");
+    Malfunction(507,"Cannot allocate TlsServerConn."); /* LOG: TlsServerConn */
   }
   assert(NULL!=tlsState.ctx);
   pServer->ssl = SSL_new(tlsState.ctx);
@@ -1709,7 +1742,7 @@ static char *althttpd_fgets(char *s, int size, FILE *in){
   assert(NULL!=tlsState.sslCon);
   return tls_gets(tlsState.sslCon, s, size);
 #else
-  Malfunction(508,"SSL not available");
+  Malfunction(508,"SSL not available"); /* LOG: SSL not available */
   return NULL;
 #endif
 }
@@ -1726,7 +1759,7 @@ static size_t althttpd_fread(void *tgt, size_t sz, size_t nmemb, FILE *in){
   assert(NULL!=tlsState.sslCon);
   return tls_read_server(tlsState.sslCon, tgt, sz*nmemb);
 #else
-  Malfunction(509,"SSL not available");
+  Malfunction(509,"SSL not available"); /* LOG: SSL not available */
   return 0;
 #endif
 }
@@ -1750,7 +1783,7 @@ static size_t althttpd_fwrite(
   assert(NULL!=tlsState.sslCon);
   return tls_write_server(tlsState.sslCon, src, sz*nmemb);
 #else
-  Malfunction(510,"SSL not available");
+  Malfunction(510,"SSL not available"); /* LOG: SSL not available */
   return 0;
 #endif
 }
@@ -1901,12 +1934,10 @@ static void CgiHandleReply(FILE *in, int isNPH){
   int iStatus = 0;             /* Reply status code */
   char zLine[1000];            /* One line of reply from the CGI script */
 
-  if( useTimeout ){
-    /* Disable the timeout, so that we can implement Hanging-GET or
-    ** long-poll style CGIs.  The RLIMIT_CPU will serve as a safety
-    ** to help prevent a run-away CGI */
-    alarm(0);
-  }
+  /* Set a 1-hour timeout, so that we can implement Hanging-GET or
+  ** long-poll style CGIs.  The RLIMIT_CPU will serve as a safety
+  ** to help prevent a run-away CGI */
+  SetTimeout(60*60, 800); /* LOG: CGI Handler timeout */
 
   if( isNPH ){
     /*
@@ -1945,7 +1976,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
         nMalloc += nMalloc + nLine*2;
         aRes = realloc(aRes, nMalloc+1);
         if( aRes==0 ){
-          Malfunction(600, "Out of memory: %d bytes", nMalloc);
+          Malfunction(600, "Out of memory: %d bytes", nMalloc); /* LOG: OOM */
         }
       }
       memcpy(aRes+nRes, zLine, nLine);
@@ -1982,7 +2013,7 @@ static void CgiHandleReply(FILE *in, int isNPH){
         nMalloc = nMalloc*2 + 1000;
         aRes = realloc(aRes, nMalloc+1);
         if( aRes==0 ){
-           Malfunction(610, "Out of memory: %d bytes", nMalloc);
+           Malfunction(610, "Out of memory: %d bytes", nMalloc); /* LOG: OOM */
         }
       }
       aRes[nRes++] = c;
@@ -2024,19 +2055,21 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   char zExtra[1000];
   in = fopen(zFile, "rb");
   if( in==0 ){
-    Malfunction(700, "cannot open \"%s\"\n", zFile);
+    Malfunction(700, "cannot open \"%s\"\n", zFile); /* LOG: cannot open file */
   }
   if( fgets(zLine, sizeof(zLine)-1, in)==0 ){
-    Malfunction(701, "cannot read \"%s\"\n", zFile);
+    Malfunction(701, "cannot read \"%s\"\n", zFile); /* LOG: cannot read file */
   }
   if( strncmp(zLine,"SCGI ",5)!=0 ){
-    Malfunction(702, "misformatted SCGI spec \"%s\"\n", zFile);
+    Malfunction(702, /* LOG: bad SCGI spec */
+       "misformatted SCGI spec \"%s\"\n", zFile);
   }
   z = zLine+5;
   zHost = GetFirstElement(z,&z);
   zPort = GetFirstElement(z,0);
   if( zHost==0 || zHost[0]==0 || zPort==0 || zPort[0]==0 ){
-    Malfunction(703, "misformatted SCGI spec \"%s\"\n", zFile);
+    Malfunction(703, /* LOG: bad SCGI spec (2) */
+       "misformatted SCGI spec \"%s\"\n", zFile);
   }
   while( fgets(zExtra, sizeof(zExtra)-1, in) ){
     char *zCmd = GetFirstElement(zExtra,&z);
@@ -2053,7 +2086,8 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
       zFallback = StrDup(z);
       continue;
     }
-    Malfunction(704, "unrecognized line in SCGI spec: \"%s %s\"\n",
+    Malfunction(704, /* LOG: Unrecognized line in SCGI spec */
+       "unrecognized line in SCGI spec: \"%s %s\"\n",
                 zCmd, z ? z : "");
   }
   fclose(in);
@@ -2063,7 +2097,8 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
   hints.ai_protocol = IPPROTO_TCP;
   rc = getaddrinfo(zHost,zPort,&hints,&ai);
   if( rc ){
-    Malfunction(704, "cannot resolve SCGI server name %s:%s\n%s\n",
+    Malfunction(705, /* LOG: Cannot resolve SCGI server name */
+       "cannot resolve SCGI server name %s:%s\n%s\n",
                 zHost, zPort, gai_strerror(rc));
   }
   while(1){  /* Exit via break */
@@ -2078,7 +2113,8 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
       if( zRelight ){
         rc = system(zRelight);
         if( rc ){
-          Malfunction(721,"Relight failed with %d: \"%s\"\n",
+          Malfunction(721, /* LOG: SCGI relight failed */
+             "Relight failed with %d: \"%s\"\n",
                       rc, zRelight);
         }
         free(zRelight);
@@ -2103,10 +2139,12 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
           free(zFallback);
           exit(0);
         }else{
-          Malfunction(706, "bad fallback file: \"%s\"\n", zFallback);
+          Malfunction(706, /* LOG: bad SCGI fallback */
+             "bad fallback file: \"%s\"\n", zFallback);
         }
       }
-      Malfunction(707, "cannot open socket to SCGI server %s\n",
+      Malfunction(707, /* LOG: Cannot open socket to SCGI */
+           "cannot open socket to SCGI server %s\n",
                   zScript);
     }
     break;
@@ -2126,7 +2164,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
       nHdrAlloc = nHdr + n1 + n2 + 1000;
       zHdr = realloc(zHdr, nHdrAlloc);
       if( zHdr==0 ){
-        Malfunction(706, "out of memory");
+        Malfunction(708, "out of memory"); /* LOG: OOM */
       }
     }
     memcpy(zHdr+nHdr, cgienv[i].zEnvName, n1);
@@ -2167,7 +2205,8 @@ static int tls_init_conn(int iSocket){
     if( NULL==tlsState.sslCon ){
       tlsState.sslCon = (TlsServerConn *)tls_new_server(iSocket);
       if( NULL==tlsState.sslCon ){
-        Malfunction(512,"Could not instantiate TLS context.");
+        Malfunction(512, /* LOG: TLS context */
+          "Could not instantiate TLS context.");
       }
       atexit(tls_atexit);
     }
@@ -2215,8 +2254,16 @@ void ProcessOneRequest(int forceClose, int socketId){
   char zLine[1000];         /* A buffer for input lines or forming names */
 
 
-  /* Must a header within 10 seconds */
-  if( useTimeout ) alarm(10);
+  /* Must see a header within 10 seconds for the first request.
+  ** Allow up to 5 more minutes for the follow-on requests
+  */
+  if( useTimeout ){
+    if( nRequest>0 ){
+      SetTimeout(60*5, 801);  /* LOG: Timeout request header (1+) */
+    }else{
+      SetTimeout(10, 802);    /* LOG: Timeout request header (0) */
+    }
+  }
 
   /* Change directories to the root of the HTTP filesystem
   */
@@ -2473,13 +2520,13 @@ void ProcessOneRequest(int forceClose, int socketId){
     }
     rangeEnd = 0;
     zPostData = SafeMalloc( len+1 );
-    if( useTimeout ) alarm(15 + len/2000);
+    SetTimeout(15 + len/2000, 803);  /* LOG: Timeout POST data */
     nPostData = althttpd_fread(zPostData,1,len,stdin);
     nIn += nPostData;
   }
 
   /* Make sure the running time is not too great */
-  if( useTimeout ) alarm(30);
+  SetTimeout(30, 804);  /* LOG: Timeout decode HTTP request */
 
   /* Convert all unusual characters in the script name into "_".
   **
@@ -2599,7 +2646,9 @@ void ProcessOneRequest(int forceClose, int socketId){
       break;
     }
     if( zScript[i]==0 || zScript[i+1]==0 ){
-      static const char *azIndex[] = { "/home", "/index", "/index.html", "/index.cgi" };
+      static const char *azIndex[] = {
+        "/home", "/index", "/index.html", "/index.cgi"
+      };
       int k = j>0 && zLine[j-1]=='/' ? j-1 : j;
       unsigned int jj;
       for(jj=0; jj<sizeof(azIndex)/sizeof(azIndex[0]); jj++){
@@ -2645,12 +2694,6 @@ void ProcessOneRequest(int forceClose, int socketId){
     tls_close_conn();
     return;
   }
-
-  /* After parsing a single successful request.  Disable subsequent timeouts.
-  ** Except, provide one timeout at 4 hours to prevent a permanently hung
-  ** process. */
-  alarm(60*60*4);  /* Timeout after 4 hours */
-  useTimeout = 0;
 
   /* Take appropriate action
   */
@@ -2767,6 +2810,8 @@ void ProcessOneRequest(int forceClose, int socketId){
     /* If it isn't executable then it must be a simple file that needs
     ** to be copied to output.
     */
+    SetTimeout(30 + statbuf.st_size/2000,
+               805); /* LOG: Timeout send static file */
     if( SendFile(zFile, lenFile, &statbuf) ){
       return;
     }
@@ -3030,7 +3075,7 @@ int main(int argc, const char **argv){
   signal(SIGSEGV, Timeout);
   signal(SIGPIPE, Timeout);
   signal(SIGXCPU, Timeout);
-  if( useTimeout ) alarm(10);
+  SetTimeout(10, 806);  /* LOG: Timeout startup */
 
 #if ENABLE_TLS
   /* We "need" to read the cert before chroot'ing to allow that the
@@ -3139,16 +3184,21 @@ int main(int argc, const char **argv){
 */
 BEGIN;
 CREATE TABLE IF NOT EXISTS xref(lineno INTEGER PRIMARY KEY, desc TEXT);
-DELETE FROM Xref;
+DELETE FROM xref;
+INSERT INTO xref VALUES(0,'Normal reply');
+INSERT INTO xref VALUES(2,'Normal HEAD reply');
 INSERT INTO xref VALUES(100,'Malloc() failed');
 INSERT INTO xref VALUES(110,'Not authorized');
 INSERT INTO xref VALUES(120,'CGI Error');
-INSERT INTO xref VALUES(130,'Timeout');
+INSERT INTO xref VALUES(131,'SIGSEGV');
+INSERT INTO xref VALUES(132,'SIGPIPE');
+INSERT INTO xref VALUES(133,'SIGXCPU');
+INSERT INTO xref VALUES(139,'Unknown signal');
 INSERT INTO xref VALUES(140,'CGI script is writable');
 INSERT INTO xref VALUES(150,'Cannot open -auth file');
-INSERT INTO xref VALUES(160,'http request on https-only page');
+INSERT INTO xref VALUES(160,' http request on https-only page');
 INSERT INTO xref VALUES(170,'-auth redirect');
-INSERT INTO xref VALUES(180,'malformed entry in -auth file');
+INSERT INTO xref VALUES(180,' malformed entry in -auth file');
 INSERT INTO xref VALUES(190,'chdir() failed');
 INSERT INTO xref VALUES(200,'bad protocol in HTTP header');
 INSERT INTO xref VALUES(210,'Empty request URI');
@@ -3156,43 +3206,73 @@ INSERT INTO xref VALUES(220,'Unknown request method');
 INSERT INTO xref VALUES(230,'Referrer is devids.net');
 INSERT INTO xref VALUES(240,'Illegal content in HOST: parameter');
 INSERT INTO xref VALUES(250,'Disallowed user agent');
+INSERT INTO xref VALUES(251,'Disallowed user agent (20190424)');
 INSERT INTO xref VALUES(260,'Disallowed referrer');
 INSERT INTO xref VALUES(270,'Request too large');
-INSERT INTO xref VALUES(280,'mkstemp() failed');
-INSERT INTO xref VALUES(290,'cannot create temp file for POST content');
-INSERT INTO xref VALUES(300,'Path element begins with . or -');
-INSERT INTO xref VALUES(310,'URI does not start with /');
+INSERT INTO xref VALUES(300,'Path element begins with "." or "-"');
+INSERT INTO xref VALUES(310,'URI does not start with "/"');
 INSERT INTO xref VALUES(320,'URI too long');
 INSERT INTO xref VALUES(330,'Missing HOST: parameter');
 INSERT INTO xref VALUES(340,'HOST parameter too long');
 INSERT INTO xref VALUES(350,'*.website permissions');
 INSERT INTO xref VALUES(360,'chdir() failed');
-INSERT INTO xref VALUES(370,'redirect to not-found page');
+INSERT INTO xref VALUES(370,'redirect to not-found');
 INSERT INTO xref VALUES(380,'URI not found');
 INSERT INTO xref VALUES(390,'File not readable');
 INSERT INTO xref VALUES(400,'URI is a directory w/o index.html');
 INSERT INTO xref VALUES(410,'redirect to add trailing /');
-INSERT INTO xref VALUES(420,'chdir() failed');
-INSERT INTO xref VALUES(430,'dup(0) failed');
 INSERT INTO xref VALUES(440,'pipe() failed');
-INSERT INTO xref VALUES(450,'dup(1) failed');
+INSERT INTO xref VALUES(441,'pipe() failed');
+INSERT INTO xref VALUES(442,'dup() failed');
+INSERT INTO xref VALUES(444,'dup() failed');
+INSERT INTO xref VALUES(445,'chdir() failed');
 INSERT INTO xref VALUES(460,'Excess URI content past static file name');
 INSERT INTO xref VALUES(470,'ETag Cache Hit');
 INSERT INTO xref VALUES(480,'fopen() failed for static content');
-INSERT INTO xref VALUES(2,'Normal HEAD reply');
-INSERT INTO xref VALUES(0,'Normal reply');
-INSERT INTO xref VALUES(500,'unknown IP protocol');
-INSERT INTO xref VALUES(501,'cannot open --input file');
-INSERT INTO xref VALUES(510,'unknown command-line argument on launch');
-INSERT INTO xref VALUES(520,'--root argument missing');
-INSERT INTO xref VALUES(530,'chdir() failed');
-INSERT INTO xref VALUES(540,'chroot() failed');
-INSERT INTO xref VALUES(550,'server startup failed');
-INSERT INTO xref VALUES(560,'setgid() failed');
-INSERT INTO xref VALUES(570,'setuid() failed');
-INSERT INTO xref VALUES(580,'unknown user');
-INSERT INTO xref VALUES(590,'cannot run as root');
-INSERT INTO xref VALUES(600,'malloc() failed');
-INSERT INTO xref VALUES(610,'malloc() failed');
-COMMIT;
+INSERT INTO xref VALUES(501,'Error initializing the SSL Server');
+INSERT INTO xref VALUES(502,'Error loading CERT file');
+INSERT INTO xref VALUES(503,'Error loading private key file');
+INSERT INTO xref VALUES(504,'Error loading self-signed cert');
+INSERT INTO xref VALUES(505,'No cert');
+INSERT INTO xref VALUES(506,'private key does not match cert');
+INSERT INTO xref VALUES(507,'TlsServerConn');
+INSERT INTO xref VALUES(508,'SSL not available');
+INSERT INTO xref VALUES(509,'SSL not available');
+INSERT INTO xref VALUES(510,'SSL not available');
+INSERT INTO xref VALUES(512,'TLS context');
+INSERT INTO xref VALUES(513,'unknown IP protocol');
+INSERT INTO xref VALUES(514,'cannot open --input file');
+INSERT INTO xref VALUES(515,'unknown command-line argument on launch');
+INSERT INTO xref VALUES(516,'--root argument missing');
+INSERT INTO xref VALUES(517,'chdir() failed');
+INSERT INTO xref VALUES(519,'chroot() failed');
+INSERT INTO xref VALUES(520,'server startup failed');
+INSERT INTO xref VALUES(521,'setgid() failed');
+INSERT INTO xref VALUES(522,'setuid() failed');
+INSERT INTO xref VALUES(523,'unknown user');
+INSERT INTO xref VALUES(524,'cannot run as root');
+INSERT INTO xref VALUES(526,'SSL read too big');
+INSERT INTO xref VALUES(527,'SSL read error');
+INSERT INTO xref VALUES(528,'SSL write too big');
+INSERT INTO xref VALUES(529,'Output buffer too small');
+INSERT INTO xref VALUES(600,'OOM');
+INSERT INTO xref VALUES(610,'OOM');
+INSERT INTO xref VALUES(700,'cannot open file');
+INSERT INTO xref VALUES(701,'cannot read file');
+INSERT INTO xref VALUES(702,'bad SCGI spec');
+INSERT INTO xref VALUES(703,'bad SCGI spec (2)');
+INSERT INTO xref VALUES(704,'Unrecognized line in SCGI spec');
+INSERT INTO xref VALUES(705,'Cannot resolve SCGI server name');
+INSERT INTO xref VALUES(706,'bad SCGI fallback');
+INSERT INTO xref VALUES(707,'Cannot open socket to SCGI');
+INSERT INTO xref VALUES(708,'OOM');
+INSERT INTO xref VALUES(720,'chdir() failed');
+INSERT INTO xref VALUES(721,'SCGI relight failed');
+INSERT INTO xref VALUES(800,'CGI Handler timeout');
+INSERT INTO xref VALUES(801,'Timeout request header (1+)');
+INSERT INTO xref VALUES(802,'Timeout request header (0)');
+INSERT INTO xref VALUES(803,'Timeout POST data');
+INSERT INTO xref VALUES(804,'Timeout decode HTTP request');
+INSERT INTO xref VALUES(805,'Timeout send static file');
+INSERT INTO xref VALUES(806,'Timeout startup');
 #endif /* SQL */
