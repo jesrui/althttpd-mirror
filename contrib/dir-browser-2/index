@@ -1,0 +1,38 @@
+#!/bin/sh
+# Dir browser CGI for use with althttpd. Docs:
+# https://sqlite.org/althttpd/doc/tip/contrib/dir-browser-2/index.md
+path=$(echo "${PATH_INFO}" | tr -s "/")
+path="${path%/}"
+[ -d ".${path}" ] || path=""
+rurl="${SCRIPT_DIRECTORY#${DOCUMENT_ROOT}}"
+durl="${rurl}/index"
+
+cd ".${path}"
+
+stat -c "%F|%n|%z|%s" [!-]* 2>/dev/null | sort | \
+awk -F '|' -v rurl="${rurl}" -v durl="${durl}" \
+	   -v path="${path}" -v purl="${path%/*}" '
+BEGIN {
+	u="BKMGT"
+	print("Content-Type: text/html\n")
+	print("<!DOCTYPE html>\n<html lang=\"en\">")
+	print("<head><meta charset=\"utf-8\" />")
+	print("<title>Index of "rurl path"</title></head>")
+	print("<body><h1>Index of "rurl path"</h1><hr />")
+	print(path=="" ? "<pre>" : "<pre><a href=\""durl purl"\">../</a>")
+}
+
+$1=="directory" {
+	printf("%s%-60s", "<a href=\""durl path"/"$2"\">", $2"/</a>")
+	printf("%.16s%20s\n", $3, "-"); next
+}
+
+$1=="regular file" && $2 !~ /^index/ {
+	e=int(log($4)/log(1024))
+	printf("%s%-60s", "<a href=\""rurl path"/"$2"\">", $2"</a>")
+	printf("%.16s%19.1f%s\n", $3, $4/(1024^e), substr(u,e+1,1))
+}
+
+END {
+	printf("</pre><hr /></body></html>")
+}'
