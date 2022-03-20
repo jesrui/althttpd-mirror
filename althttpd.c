@@ -3075,7 +3075,7 @@ int main(int argc, const char **argv){
   signal(SIGSEGV, Timeout);
   signal(SIGPIPE, Timeout);
   signal(SIGXCPU, Timeout);
-  SetTimeout(10, 806);  /* LOG: Timeout startup */
+  if( !standalone ) SetTimeout(10, 806);  /* LOG: Timeout startup */
 
 #if ENABLE_TLS
   /* We "need" to read the cert before chroot'ing to allow that the
