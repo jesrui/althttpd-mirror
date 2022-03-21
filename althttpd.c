@@ -2251,7 +2251,7 @@ void ProcessOneRequest(int forceClose, int socketId){
 #ifdef LOG_HEADER
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
-  char zLine[1000];         /* A buffer for input lines or forming names */
+  char zLine[10000];        /* A buffer for input lines or forming names */
 
 
   /* Must see a header within 10 seconds for the first request.
