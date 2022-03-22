@@ -2285,20 +2285,35 @@ void ProcessOneRequest(int forceClose, int socketId){
   }
   gettimeofday(&beginTime, 0);
   omitLog = 0;
-  nIn += strlen(zLine);
+  nIn += (i = (int)strlen(zLine));
 
   /* Parse the first line of the HTTP request */
   zMethod = StrDup(GetFirstElement(zLine,&z));
   zRealScript = zScript = StrDup(GetFirstElement(z,&z));
   zProtocol = StrDup(GetFirstElement(z,&z));
-  if( zProtocol==0 || strncmp(zProtocol,"HTTP/",5)!=0 || strlen(zProtocol)!=8 ){
-    StartResponse("400 Bad Request");
-    nOut += althttpd_printf(
-      "Content-type: text/plain; charset=utf-8\r\n"
-      "\r\n"
-      "This server does not understand the requested protocol\n"
-    );
-    MakeLogEntry(0, 200); /* LOG: bad protocol in HTTP header */
+  if( zProtocol==0
+   || strncmp(zProtocol,"HTTP/",5)!=0
+   || strlen(zProtocol)!=8
+   || i>9990
+  ){
+    zProtocol = 0;
+    if( i<=9990 ){
+      StartResponse("400 Bad Request");
+      nOut += althttpd_printf(
+        "Content-type: text/plain; charset=utf-8\r\n"
+        "\r\n"
+        "This server does not understand the requested protocol\n"
+      );
+      MakeLogEntry(0, 200); /* LOG: bad protocol in HTTP header */
+    }else{
+      StartResponse("414 URI Too Long");
+      nOut += althttpd_printf(
+        "Content-type: text/plain; charset=utf-8\r\n"
+        "\r\n"
+        "URI too long\n"
+      );
+      MakeLogEntry(0, 201); /* LOG: bad protocol in HTTP header */
+    }
     exit(0);
   }
   if( zScript[0]!='/' ) NotFound(210); /* LOG: Empty request URI */
@@ -3201,6 +3216,7 @@ INSERT INTO xref VALUES(170,'-auth redirect');
 INSERT INTO xref VALUES(180,' malformed entry in -auth file');
 INSERT INTO xref VALUES(190,'chdir() failed');
 INSERT INTO xref VALUES(200,'bad protocol in HTTP header');
+INSERT INTO xref VALUES(201,'URI too long');
 INSERT INTO xref VALUES(210,'Empty request URI');
 INSERT INTO xref VALUES(220,'Unknown request method');
 INSERT INTO xref VALUES(230,'Referrer is devids.net');
