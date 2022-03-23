@@ -2998,17 +2998,37 @@ int main(int argc, const char **argv){
     const char *z = argv[1];
     const char *zArg = argc>=3 ? argv[2] : "0";
     if( z[0]=='-' && z[1]=='-' ) z++;
+    if( strcmp(z,"-root")==0 ){
+      zRoot = zArg;
+    }else
+    if( strcmp(z,"-logfile")==0 ){
+      zLogFile = zArg;
+    }else
+#ifdef ENABLE_TLS
+    if( strcmp(z, "-cert")==0 ){
+      useHttps = 2;
+      zHttpScheme = "https";
+      zHttps = "on";
+      tlsState.zCertFile = zArg;
+      if( tlsState.zKeyFile==0 ) tlsState.zKeyFile = zArg;
+      if( standalone ){
+        standalone = 2;
+      }
+    }else
+    if( strcmp(z, "-pkey")==0 ){
+      tlsState.zKeyFile = zArg;
+    }else
+#endif
     if( strcmp(z,"-user")==0 ){
       zPermUser = zArg;
-    }else if( strcmp(z,"-root")==0 ){
-      zRoot = zArg;
-    }else if( strcmp(z,"-logfile")==0 ){
-      zLogFile = zArg;
-    }else if( strcmp(z,"-max-age")==0 ){
+    }else
+    if( strcmp(z,"-max-age")==0 ){
       mxAge = atoi(zArg);
-    }else if( strcmp(z,"-max-cpu")==0 ){
+    }else
+    if( strcmp(z,"-max-cpu")==0 ){
       maxCpu = atoi(zArg);
-    }else if( strcmp(z,"-https")==0 ){
+    }else
+    if( strcmp(z,"-https")==0 ){
       int const x = atoi(zArg);
       if( x<=0 ){
         useHttps = 0;
@@ -3020,10 +3040,12 @@ int main(int argc, const char **argv){
         zRemoteAddr = getenv("REMOTE_HOST");
         useHttps = 1;
       }
-    }else if( strcmp(z, "-port")==0 ){
+    }else
+    if( strcmp(z, "-port")==0 ){
       zPort = zArg;
       standalone = 1 + (useHttps==2);
-    }else if( strcmp(z, "-family")==0 ){
+    }else
+    if( strcmp(z, "-family")==0 ){
       if( strcmp(zArg, "ipv4")==0 ){
         ipv4Only = 1;
       }else if( strcmp(zArg, "ipv6")==0 ){
@@ -3032,42 +3054,33 @@ int main(int argc, const char **argv){
         Malfunction(513,  /* LOG: unknown IP protocol */
                     "unknown IP protocol: [%s]\n", zArg);
       }
-    }else if( strcmp(z, "-jail")==0 ){
+    }else
+    if( strcmp(z, "-jail")==0 ){
       if( atoi(zArg)==0 ){
         useChrootJail = 0;
       }
-    }else if( strcmp(z, "-debug")==0 ){
+    }else
+    if( strcmp(z, "-debug")==0 ){
       if( atoi(zArg) ){
         useTimeout = 0;
       }
-    }else if( strcmp(z, "-input")==0 ){
+    }else
+    if( strcmp(z, "-input")==0 ){
       if( freopen(zArg, "rb", stdin)==0 || stdin==0 ){
         Malfunction(514, /* LOG: cannot open --input file */
                     "cannot open --input file \"%s\"\n", zArg);
       }
-    }
-#ifdef ENABLE_TLS
-    else if( strcmp(z, "-cert")==0 ){
-      useHttps = 2;
-      zHttpScheme = "https";
-      zHttps = "on";
-      tlsState.zCertFile = zArg;
-      if( tlsState.zKeyFile==0 ) tlsState.zKeyFile = zArg;
-      if( standalone ){
-        standalone = 2;
-      }
-    }else if( strcmp(z, "-pkey")==0 ){
-      tlsState.zKeyFile = zArg;
-    }
-#endif
-    else if( strcmp(z, "-version")==0 ){
+    }else
+    if( strcmp(z, "-version")==0 ){
       puts(SERVER_SOFTWARE_TLS);
       return 0;
-    }else if( strcmp(z, "-datetest")==0 ){
+    }else
+    if( strcmp(z, "-datetest")==0 ){
       TestParseRfc822Date();
       printf("Ok\n");
       exit(0);
-    }else{
+    }else
+    {
       Malfunction(515, /* LOG: unknown command-line argument on launch */
                   "unknown argument: [%s]\n", z);
     }
