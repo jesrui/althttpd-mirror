@@ -1078,7 +1078,7 @@ static void ServiceUnavailable(int lineno){
   nOut += althttpd_printf(
     "Content-type: text/plain; charset=utf-8\r\n"
     "\r\n"
-    "Service to IP address %s termporarily blocked due to abuse\n",
+    "Service to IP address %s temporarily blocked due to abuse\n",
     zRemoteAddr
   );
   closeConnection = 1;
