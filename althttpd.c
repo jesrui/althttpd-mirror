@@ -1031,7 +1031,7 @@ static int LikelyHackAttempt(void){
 ** +  The file does not exist.  Create it anew and make it one byte in size.
 **
 ** The UnlinkExpiredIPBlockers() routine will run from time to time to
-** unlink expired blocker files.  If the DisallowRemoteAddr() routine finds
+** unlink expired blocker files.  If the DisallowedRemoteAddr() routine finds
 ** an expired blocker file corresponding to zRemoteAddr, it might unlink
 ** that one blocker file if the file has been expired for long enough.
 */
