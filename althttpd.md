@@ -330,6 +330,10 @@ althttpd always returns a 404 Not Found error.  Thus it is safe to put
 auxiliary files (databases or other content used by CGI, for example)
 in the document hierarchy as long as the filenames being with "." or "-".
 
+When althttpd returns a 404, it tries to determine whether the request
+is malicous and, if it believes so, it may optionally [temporarily
+block the client's IP](#ipshun).
+
 An exception:  Though althttpd normally returns 404 Not Found for any
 request with a path element beginning with ".", it does allow requests
 where the URI begins with "/.well-known/".  File or directory names
@@ -458,3 +462,36 @@ something like:
 
 >
      -logfile /var/logs/althttpd/httplog-%Y%m%d.csv
+
+
+<a id="ipshun"></a>
+Client IP Blocking
+------------------
+
+If the `--ipshun DIRECTORY` option is included to althttpd and
+DIRECTORY is an absolute pathname (begins with "/") accessible from
+within the chroot jail, and if the IP address of the client appears as
+a file within that directory, then althttpd might return 503 Service
+Unavailable rather than process the request.
+
+*  If the file is zero bytes in size, then 503 is always returned.
+   Thus you can "touch" a file that is an IP address name to
+   permanently banish that client.
+
+*  If the file is N bytes in size, then 503 is returned if the mtime
+   of the file is less than 60*N seconds ago.  In other words, the
+   client is banished for one minute per byte in the file.
+
+Banishment files are automatically created if althttpd gets a request
+that would have resulted in a 404 Not Found, and upon examining the
+REQUEST_URI the request looks suspicious. Any request that include
+/../ is considered a hack attempt, for example. There are other common
+vulnerability probes that are also checked. Probably this list of
+vulnerability probes will grow with experience.
+
+The banishment files are automatically unlinked after 5 minutes/byte.
+
+Banishment files are initially 1 byte in size. But if a banishment
+expires and then a new request arrives prior to 5 minutes per byte of
+block-file size, then the file grows by one byte and the mtime is
+reset.
