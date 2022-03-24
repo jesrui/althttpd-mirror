@@ -27,9 +27,10 @@ OPENSSLDIR = /home/drh/fossil/release-build/compat/openssl
 OPENSSLLIB = -L$(OPENSSLDIR) -lssl -lcrypto -ldl
 CPPFLAGS += -I$(OPENSSLDIR)/include -DENABLE_TLS
 CPPFLAGS += -Wall -Wextra
+CFLAGS = -Os
 
 althttpd:	althttpd.c manifest
-	gcc $(CPPFLAGS) -Os -o althttpd althttpd.c $(OPENSSLLIB)
+	gcc $(CPPFLAGS) $(CFLAGS) -o althttpd althttpd.c $(OPENSSLLIB)
 
 clean:	
 	rm -f althttpd
