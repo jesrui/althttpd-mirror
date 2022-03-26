@@ -107,9 +107,11 @@
 **
 **  --ipshun DIR     If the remote IP address is also the name of a file
 **                   in DIR that has size N bytes and where either N is zero
-**                   or the m-time of the file is less than N minutes ago,
+**                   or the m-time of the file is less than N time-units ago
 **                   then that IP address is being shunned and no requests
-**                   are processed.  The client gets a 503 Service Unavailable
+**                   are processed.  The time-unit is a compile-time option
+**                   (BANISH_TIME) that defaults to 300 seconds.  If this
+**                   happens, the client gets a 503 Service Unavailable
 **                   reply. Furthermore, althttpd will create ip-shunning
 **                   files following a 404 Not Found error if the request
 **                   URI is an obvious hack attempt.
@@ -307,6 +309,10 @@
 
 #ifndef ALTHTTPD_VERSION
 #define ALTHTTPD_VERSION "2.0"
+#endif
+
+#ifndef BANISH_TIME
+#define BANISH_TIME 300               /* How long to banish for abuse (sec) */
 #endif
 
 #ifndef SERVER_SOFTWARE
@@ -982,7 +988,7 @@ static void UnlinkExpiredIPBlockers(void){
     if( rc ) continue;
     if( !S_ISREG(statbuf.st_mode) ) continue;
     if( statbuf.st_size==0 ) continue;
-    if( statbuf.st_size*300 + statbuf.st_mtime > now ) continue;
+    if( statbuf.st_size*5*BANISH_TIME + statbuf.st_mtime > now ) continue;
     unlink(zFilename);
   }
   closedir(pDir);
@@ -993,6 +999,7 @@ static void UnlinkExpiredIPBlockers(void){
 */
 static int LikelyHackAttempt(void){
   if( zScript==0 ) return 0;
+  if( zScript[0]==0 ) return 0;
   if( zScript[0]!='/' ) return 1;
   if( strstr(zScript, "/../")!=0 ) return 1;
   if( strstr(zScript, "/./")!=0 ) return 1;
@@ -1002,6 +1009,7 @@ static int LikelyHackAttempt(void){
   if( strstr(zScript, "_OR_")!=0 ) return 1;
   if( strstr(zScript, "_AND_")!=0 ) return 1;
   if( strstr(zScript, "/etc/passwd")!=0 ) return 1;
+  if( strstr(zScript, "/bin/sh")!=0 ) return 1;
   if( strstr(zScript, "/.git/")!=0 ) return 1;
   return 0;
 }
@@ -1849,11 +1857,16 @@ static int sanitizeString(char *z){
   int nChange = 0;
   while( *z ){
     if( !allowedInName[*(unsigned char*)z] ){
+      char cNew = '_';
       if( *z=='%' && z[1]!=0 && z[2]!=0 ){
         int i;
+        if( z[1]=='2' ){
+          if( z[2]=='e' || z[2]=='E' ) cNew = '.';
+          if( z[2]=='f' || z[2]=='F' ) cNew = '/';
+        }
         for(i=3; (z[i-2] = z[i])!=0; i++){}
       }
-      *z = '_';
+      *z = cNew;
       nChange++;
     }
     z++;
@@ -2426,15 +2439,15 @@ static void tls_close_conn(void){
 **    *  There is a file in zIPShunDir whose name is exactly zRemoteAddr
 **       and that is N bytes in size.
 **
-**    *  N==0 or the mtime of the file is less than N*60 seconds
+**    *  N==0 or the mtime of the file is less than N*BANISH_TIME seconds
 **       ago.
 **
-** If N>0 and the mtime is greater than N*300 seconds (5 minutes per byte)
-** old, then the file is deleted.
+** If N>0 and the mtime is greater than N*5*BANISH_TIME seconds 
+** (25 minutes per byte, by default) old, then the file is deleted.
 **
 ** The size of the file determines how long the embargo is suppose to
-** last.  Are zero-byte file embargos forever.  Otherwise, the embargo
-** is for one minutes for each byte in the file.
+** last.  A zero-byte file embargos forever.  Otherwise, the embargo
+** is for BANISH_TIME bytes for each byte in the file.
 */
 static int DisallowedRemoteAddr(void){
   char zFullname[1000];
@@ -2472,10 +2485,10 @@ static int DisallowedRemoteAddr(void){
   if( rc ) return 0;  /* No such file, hence no restrictions */
   if( statbuf.st_size==0 ) return 1;  /* Permanently banned */
   time(&now);
-  if( statbuf.st_size*60 + statbuf.st_mtime >= now ){
+  if( statbuf.st_size*BANISH_TIME + statbuf.st_mtime >= now ){
     return 1;  /* Currently under a ban */
   }
-  if( statbuf.st_size*300 + statbuf.st_mtime < now ){
+  if( statbuf.st_size*5*BANISH_TIME + statbuf.st_mtime < now ){
     unlink(zFullname);
   }
   return 0;
