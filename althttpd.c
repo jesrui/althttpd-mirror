@@ -3588,6 +3588,6 @@ INSERT INTO xref VALUES(803,'Timeout POST data');
 INSERT INTO xref VALUES(804,'Timeout decode HTTP request');
 INSERT INTO xref VALUES(805,'Timeout send static file');
 INSERT INTO xref VALUES(806,'Timeout startup');
-INSERT INTO xfer VALUES(901,'Prohibited remote IP address');
-INSERT INTO xfer VALUES(902,'Bashdoor attack');
+INSERT INTO xref VALUES(901,'Prohibited remote IP address');
+INSERT INTO xref VALUES(902,'Bashdoor attack');
 #endif /* SQL */
