@@ -105,6 +105,17 @@
 **                   FILE name is expanded using strftime() if it contains
 **                   at least one '%' and is not too long.
 **
+**  --ipshun DIR     If the remote IP address is also the name of a file
+**                   in DIR that has size N bytes and where either N is zero
+**                   or the m-time of the file is less than N time-units ago
+**                   then that IP address is being shunned and no requests
+**                   are processed.  The time-unit is a compile-time option
+**                   (BANISH_TIME) that defaults to 300 seconds.  If this
+**                   happens, the client gets a 503 Service Unavailable
+**                   reply. Furthermore, althttpd will create ip-shunning
+**                   files following a 404 Not Found error if the request
+**                   URI is an obvious hack attempt.
+**
 **  --https BOOLEAN  Indicates that input is coming over SSL and is being
 **                   decoded upstream, perhaps by stunnel. This option
 **                   does *not* activate built-in TLS support.  Use --cert
@@ -277,6 +288,7 @@
 #include <errno.h>
 #include <sys/resource.h>
 #include <signal.h>
+#include <dirent.h>
 #ifdef linux
 #include <sys/sendfile.h>
 #endif
@@ -297,6 +309,10 @@
 
 #ifndef ALTHTTPD_VERSION
 #define ALTHTTPD_VERSION "2.0"
+#endif
+
+#ifndef BANISH_TIME
+#define BANISH_TIME 300               /* How long to banish for abuse (sec) */
 #endif
 
 #ifndef SERVER_SOFTWARE
@@ -356,6 +372,7 @@ static int nOut = 0;             /* Number of bytes of output */
 static char zReplyStatus[4];     /* Reply status code */
 static int statusSent = 0;       /* True after status line is sent */
 static const char *zLogFile = 0; /* Log to this file */
+static const char *zIPShunDir=0; /* Directory containing hostile IP addresses */
 static int debugFlag = 0;        /* True if being debugged */
 static struct timeval beginTime; /* Time when this process starts */
 static int closeConnection = 0;  /* True to send Connection: close in reply */
@@ -379,6 +396,8 @@ static int maxCpu = MAX_CPU;     /* Maximum CPU time per process */
 
 /* Forward reference */
 static void Malfunction(int errNo, const char *zFormat, ...);
+
+
 
 #ifdef ENABLE_TLS
 #include <openssl/bio.h>
@@ -527,9 +546,27 @@ static int althttpd_printf(char const * fmt, ...){
   va_end(va);
   return rc;
 }
+static void *tls_new_server(int iSocket);
+static void tls_close_server(void *pServerArg);
+static void tls_atexit(void);
 #else
 #define althttpd_printf printf
 #endif
+
+
+/* forward references */
+static int tls_init_conn(int iSocket);
+static void tls_close_conn(void);
+static void althttpd_fflush(FILE *f);
+
+/*
+** Flush the buffer then exit.
+*/
+static void althttpd_exit(void){
+  althttpd_fflush(stdout);
+  tls_close_conn();
+  exit(0);
+}
 
 /*
 ** Mapping between CGI variable names and values stored in
@@ -710,6 +747,10 @@ static char *SafeMalloc( size_t size ){
   return p;
 }
 
+/* Forward reference */
+static void BlockIPAddress(void);
+static void ServiceUnavailable(int lineno);
+
 /*
 ** Set the value of environment variable zVar to zValue.
 */
@@ -718,7 +759,11 @@ static void SetEnv(const char *zVar, const char *zValue){
   size_t len;
   if( zValue==0 ) zValue="";
   /* Disable an attempted bashdoor attack */
-  if( strncmp(zValue,"() {",4)==0 ) zValue = "";
+  if( strncmp(zValue,"() {",4)==0 ){
+    BlockIPAddress();
+    ServiceUnavailable(902); /* LOG: 902 bashdoor attack */
+    zValue = "";
+  }
   len = strlen(zVar) + strlen(zValue) + 2;
   z = SafeMalloc(len);
   sprintf(z,"%s=%s",zVar,zValue);
@@ -906,9 +951,158 @@ static void StartResponse(const char *zResultCode){
 }
 
 /*
+** Check all of the files in the zIPShunDir directory.  Unlink any
+** files in that directory that have expired.
+**
+** This routine might be slow if there are a lot of blocker files.
+** So it only runs when we are not in a hurry, such as prior to sending
+** a 404 Not Found reply.
+*/
+static void UnlinkExpiredIPBlockers(void){
+  DIR *pDir;
+  struct dirent *pFile;
+  size_t nIPShunDir;
+  time_t now;
+  char zFilename[2000];
+
+  if( zIPShunDir==0 ) return;
+  if( zIPShunDir[0]!='/' ) return;
+  nIPShunDir = strlen(zIPShunDir);
+  while( nIPShunDir>0 && zIPShunDir[nIPShunDir-1]=='/' ) nIPShunDir--;
+  if( nIPShunDir > sizeof(zFilename)-100 ) return;
+  memcpy(zFilename, zIPShunDir, nIPShunDir);
+  zFilename[nIPShunDir] = 0;
+  pDir = opendir(zFilename);
+  if( pDir==0 ) return;
+  zFilename[nIPShunDir] = '/';
+  time(&now);
+  while( (pFile = readdir(pDir))!=0 ){
+    size_t nFile = strlen(pFile->d_name);
+    int rc;
+    struct stat statbuf;
+    if( nIPShunDir+nFile >= sizeof(zFilename)-2 ) continue;
+    if( strstr(pFile->d_name, "..") ) continue;
+    memcpy(zFilename+nIPShunDir+1, pFile->d_name, nFile+1);
+    memset(&statbuf, 0, sizeof(statbuf));
+    rc = stat(zFilename, &statbuf);
+    if( rc ) continue;
+    if( !S_ISREG(statbuf.st_mode) ) continue;
+    if( statbuf.st_size==0 ) continue;
+    if( statbuf.st_size*5*BANISH_TIME + statbuf.st_mtime > now ) continue;
+    unlink(zFilename);
+  }
+  closedir(pDir);
+}
+
+/* Return true if the request URI contained in zScript[] seems like a
+** hack attempt.
+*/
+static int LikelyHackAttempt(void){
+  if( zScript==0 ) return 0;
+  if( zScript[0]==0 ) return 0;
+  if( zScript[0]!='/' ) return 1;
+  if( strstr(zScript, "/../")!=0 ) return 1;
+  if( strstr(zScript, "/./")!=0 ) return 1;
+  if( strstr(zScript, "_SELECT_")!=0 ) return 1;
+  if( strstr(zScript, "_select_")!=0 ) return 1;
+  if( strstr(zScript, "_sleep_")!=0 ) return 1;
+  if( strstr(zScript, "_OR_")!=0 ) return 1;
+  if( strstr(zScript, "_AND_")!=0 ) return 1;
+  if( strstr(zScript, "/etc/passwd")!=0 ) return 1;
+  if( strstr(zScript, "/bin/sh")!=0 ) return 1;
+  if( strstr(zScript, "/.git/")!=0 ) return 1;
+  return 0;
+}
+
+/*
+** An abusive HTTP request has been submitted by the IP address zRemoteAddr.
+** Block future requests coming from this IP address.
+**
+** This only happens if the zIPShunDir variable is set, which is only set
+** by the --ipshun command-line option.  Without that setting, this routine
+** is a no-op.
+**
+** If zIPShunDir is a valid directory, then this routine uses zRemoteAddr
+** as the name of a file within that directory.  Cases:
+**
+** +  The file already exists and is not an empty file.  This will be the
+**    case if the same IP was recently blocked, but the block has expired,
+**    and yet the expiration was not so long ago that the blocking file has
+**    been unlinked.  In this case, add one character to the file, which
+**    will update its mtime (causing it to be active again) and increase
+**    its expiration timeout.
+**
+** +  The file exists and is empty.  This happens if the administrator
+**    uses "touch" to create the file.  An empty blocking file indicates
+**    a permanent block.  Do nothing.
+**
+** +  The file does not exist.  Create it anew and make it one byte in size.
+**
+** The UnlinkExpiredIPBlockers() routine will run from time to time to
+** unlink expired blocker files.  If the DisallowedRemoteAddr() routine finds
+** an expired blocker file corresponding to zRemoteAddr, it might unlink
+** that one blocker file if the file has been expired for long enough.
+*/
+static void BlockIPAddress(void){
+  size_t nIPShunDir;
+  size_t nRemoteAddr;
+  int rc;
+  struct stat statbuf;
+  char zFullname[1000];
+
+  if( zIPShunDir==0 ) return;
+  if( zRemoteAddr==0 ) return;
+  if( zRemoteAddr[0]==0 ) return;
+
+  /* If we reach this point, it means that a suspicious request was
+  ** received and we want to activate IP blocking on the remote
+  ** address.
+  */
+  nIPShunDir = strlen(zIPShunDir);
+  while( nIPShunDir>0 && zIPShunDir[nIPShunDir-1]=='/' ) nIPShunDir--;
+  nRemoteAddr = strlen(zRemoteAddr);
+  if( nIPShunDir + nRemoteAddr + 2 >= sizeof(zFullname) ){
+    Malfunction(914, /* LOG: buffer overflow */
+       "buffer overflow");
+  }
+  memcpy(zFullname, zIPShunDir, nIPShunDir);
+  zFullname[nIPShunDir] = '/';
+  memcpy(zFullname+nIPShunDir+1, zRemoteAddr, nRemoteAddr+1);
+  rc = stat(zFullname, &statbuf);
+  if( rc!=0 || statbuf.st_size>0 ){
+    FILE *lock = fopen(zFullname, "a");
+    if( lock ){
+      fputc('X', lock);
+      fclose(lock);
+    }
+  }
+}
+
+/*
+** Send a service-unavailable reply.
+*/
+static void ServiceUnavailable(int lineno){
+  StartResponse("503 Service Unavailable");
+  nOut += althttpd_printf(
+    "Content-type: text/plain; charset=utf-8\r\n"
+    "\r\n"
+    "Service to IP address %s temporarily blocked due to abuse\n",
+    zRemoteAddr
+  );
+  closeConnection = 1;
+  MakeLogEntry(0, lineno);
+  althttpd_exit();
+}
+
+/*
 ** Tell the client that there is no such document
 */
 static void NotFound(int lineno){
+  UnlinkExpiredIPBlockers();
+  if( LikelyHackAttempt() ){
+    BlockIPAddress();
+    ServiceUnavailable(lineno);
+  }
   StartResponse("404 Not Found");
   nOut += althttpd_printf(
     "Content-type: text/html; charset=utf-8\r\n"
@@ -918,7 +1112,7 @@ static void NotFound(int lineno){
     "The document %s is not available on this server\n"
     "</body>\n", lineno, zScript);
   MakeLogEntry(0, lineno);
-  exit(0);
+  althttpd_exit();
 }
 
 /*
@@ -933,7 +1127,7 @@ static void Forbidden(int lineno){
   );
   closeConnection = 1;
   MakeLogEntry(0, lineno);
-  exit(0);
+  althttpd_exit();
 }
 
 /*
@@ -966,6 +1160,7 @@ static void CgiError(void){
     "The CGI program %s generated an error\n"
     "</body>\n", zScript);
   MakeLogEntry(0, 120);  /* LOG: CGI Error */
+  althttpd_exit();
   exit(0);
 }
 
@@ -1025,7 +1220,7 @@ static void CgiScriptWritable(void){
     "The CGI program %s is writable by users other than its owner.\n",
     zRealScript);
   MakeLogEntry(0, 140);  /* LOG: CGI script is writable */
-  exit(0);       
+  althttpd_exit();
 }
 
 /*
@@ -1046,7 +1241,7 @@ void Malfunction(int linenum, const char *zFormat, ...){
   }
   va_end(ap);
   MakeLogEntry(0, linenum);
-  exit(0);
+  althttpd_exit();
 }
 
 /*
@@ -1662,11 +1857,16 @@ static int sanitizeString(char *z){
   int nChange = 0;
   while( *z ){
     if( !allowedInName[*(unsigned char*)z] ){
+      char cNew = '_';
       if( *z=='%' && z[1]!=0 && z[2]!=0 ){
         int i;
+        if( z[1]=='2' ){
+          if( z[2]=='e' || z[2]=='E' ) cNew = '.';
+          if( z[2]=='f' || z[2]=='F' ) cNew = '/';
+        }
         for(i=3; (z[i-2] = z[i])!=0; i++){}
       }
-      *z = '_';
+      *z = cNew;
       nChange++;
     }
     z++;
@@ -1682,7 +1882,6 @@ static int countSlashes(const char *z){
   while( *z ) if( *(z++)=='/' ) n++;
   return n;
 }
-
 
 #ifdef ENABLE_TLS
 /*
@@ -1722,6 +1921,7 @@ static void tls_atexit(void){
   }
 }
 #endif /* ENABLE_TLS */
+
 
 /*
 ** Works like fgets():
@@ -2137,7 +2337,7 @@ static void SendScgiRequest(const char *zFile, const char *zScript){
           closeConnection = 1;
           rc = SendFile(zFallback, (int)strlen(zFallback), &statbuf);
           free(zFallback);
-          exit(0);
+          althttpd_exit();
         }else{
           Malfunction(706, /* LOG: bad SCGI fallback */
              "bad fallback file: \"%s\"\n", zFallback);
@@ -2224,6 +2424,74 @@ static void tls_close_conn(void){
     tlsState.sslCon = NULL;
   }
 #endif
+}
+
+/*
+** Check to see if zRemoteAddr is disallowed.  Return true if it is
+** disallowed and false if not.
+**
+** zRemoteAddr is disallowed if:
+**
+**    *  The zIPShunDir variable is not NULL
+**
+**    *  zIPShunDir is the name of a directory
+**
+**    *  There is a file in zIPShunDir whose name is exactly zRemoteAddr
+**       and that is N bytes in size.
+**
+**    *  N==0 or the mtime of the file is less than N*BANISH_TIME seconds
+**       ago.
+**
+** If N>0 and the mtime is greater than N*5*BANISH_TIME seconds 
+** (25 minutes per byte, by default) old, then the file is deleted.
+**
+** The size of the file determines how long the embargo is suppose to
+** last.  A zero-byte file embargos forever.  Otherwise, the embargo
+** is for BANISH_TIME bytes for each byte in the file.
+*/
+static int DisallowedRemoteAddr(void){
+  char zFullname[1000];
+  size_t nIPShunDir;
+  size_t nRemoteAddr;
+  int rc;
+  struct stat statbuf;
+  time_t now;
+
+  if( zIPShunDir==0 ) return 0;
+  if( zRemoteAddr==0 ) return 0;
+  if( zIPShunDir[0]!='/' ){
+    Malfunction(910, /* LOG: argument to --ipshun should be absolute path */
+       "The --ipshun directory should have an absolute path");
+  }
+  nIPShunDir = strlen(zIPShunDir);
+  while( nIPShunDir>0 && zIPShunDir[nIPShunDir-1]=='/' ) nIPShunDir--;
+  nRemoteAddr = strlen(zRemoteAddr);
+  if( nIPShunDir + nRemoteAddr + 2 >= sizeof(zFullname) ){
+    Malfunction(912, /* LOG: RemoteAddr filename too big */
+       "RemoteAddr filename too big");
+  }
+  if( zRemoteAddr[0]==0
+   || zRemoteAddr[0]=='.'
+   || strchr(zRemoteAddr,'/')!=0
+  ){
+    Malfunction(913, /* LOG: RemoteAddr contains suspicious characters */
+       "RemoteAddr contains suspicious characters");
+  }
+  memcpy(zFullname, zIPShunDir, nIPShunDir);
+  zFullname[nIPShunDir] = '/';
+  memcpy(zFullname+nIPShunDir+1, zRemoteAddr, nRemoteAddr+1);
+  memset(&statbuf, 0, sizeof(statbuf));
+  rc = stat(zFullname, &statbuf);
+  if( rc ) return 0;  /* No such file, hence no restrictions */
+  if( statbuf.st_size==0 ) return 1;  /* Permanently banned */
+  time(&now);
+  if( statbuf.st_size*BANISH_TIME + statbuf.st_mtime >= now ){
+    return 1;  /* Currently under a ban */
+  }
+  if( statbuf.st_size*5*BANISH_TIME + statbuf.st_mtime < now ){
+    unlink(zFullname);
+  }
+  return 0;
 }
 
 /*
@@ -2314,7 +2582,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       );
       MakeLogEntry(0, 201); /* LOG: bad protocol in HTTP header */
     }
-    exit(0);
+    althttpd_exit();
   }
   if( zScript[0]!='/' ) NotFound(210); /* LOG: Empty request URI */
   while( zScript[1]=='/' ){
@@ -2339,7 +2607,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       "The %s method is not implemented on this server.\n",
       zMethod);
     MakeLogEntry(0, 220); /* LOG: Unknown request method */
-    exit(0);
+    althttpd_exit();
   }
 
   /* If there is a log file (if zLogFile!=0) and if the pathname in
@@ -2531,7 +2799,7 @@ void ProcessOneRequest(int forceClose, int socketId){
         "Too much POST data\n"
       );
       MakeLogEntry(0, 270); /* LOG: Request too large */
-      exit(0);
+      althttpd_exit();
     }
     rangeEnd = 0;
     zPostData = SafeMalloc( len+1 );
@@ -2542,6 +2810,11 @@ void ProcessOneRequest(int forceClose, int socketId){
 
   /* Make sure the running time is not too great */
   SetTimeout(30, 804);  /* LOG: Timeout decode HTTP request */
+
+  /* Refuse to process the request if the IP address has been banished */
+  if( zIPShunDir && DisallowedRemoteAddr() ){
+    ServiceUnavailable(901); /* LOG: Prohibited remote IP address */
+  }
 
   /* Convert all unusual characters in the script name into "_".
   **
@@ -3022,6 +3295,9 @@ int main(int argc, const char **argv){
     if( strcmp(z,"-user")==0 ){
       zPermUser = zArg;
     }else
+    if( strcmp(z,"-ipshun")==0 ){
+      zIPShunDir = zArg;
+    }else
     if( strcmp(z,"-max-age")==0 ){
       mxAge = atoi(zArg);
     }else
@@ -3080,6 +3356,11 @@ int main(int argc, const char **argv){
       printf("Ok\n");
       exit(0);
     }else
+    if( strcmp(z,"-remote-addr")==0 ){
+      /* Used for testing purposes only - to simulate a remote IP address when
+      ** input is really coming from a disk file. */
+      zRemoteAddr = StrDup(zArg);
+    }else
     {
       Malfunction(515, /* LOG: unknown command-line argument on launch */
                   "unknown argument: [%s]\n", z);
@@ -3099,11 +3380,13 @@ int main(int argc, const char **argv){
   /*
   ** 10 seconds to get started
   */
-  signal(SIGALRM, Timeout);
-  signal(SIGSEGV, Timeout);
-  signal(SIGPIPE, Timeout);
-  signal(SIGXCPU, Timeout);
-  if( !standalone ) SetTimeout(10, 806);  /* LOG: Timeout startup */
+  if( useTimeout ){
+    signal(SIGALRM, Timeout);
+    signal(SIGSEGV, Timeout);
+    signal(SIGPIPE, Timeout);
+    signal(SIGXCPU, Timeout);
+    if( !standalone ) SetTimeout(10, 806);  /* LOG: Timeout startup */
+  }
 
 #if ENABLE_TLS
   /* We "need" to read the cert before chroot'ing to allow that the
@@ -3197,6 +3480,7 @@ int main(int argc, const char **argv){
     zRemoteAddr += 7;
   }
   zServerSoftware = useHttps==2 ? SERVER_SOFTWARE_TLS : SERVER_SOFTWARE;
+
   /* Process the input stream */
   for(i=0; i<100; i++){
     ProcessOneRequest(0, httpConnection);
@@ -3304,4 +3588,6 @@ INSERT INTO xref VALUES(803,'Timeout POST data');
 INSERT INTO xref VALUES(804,'Timeout decode HTTP request');
 INSERT INTO xref VALUES(805,'Timeout send static file');
 INSERT INTO xref VALUES(806,'Timeout startup');
+INSERT INTO xfer VALUES(901,'Prohibited remote IP address');
+INSERT INTO xfer VALUES(902,'Bashdoor attack');
 #endif /* SQL */
