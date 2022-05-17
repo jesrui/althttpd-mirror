@@ -1771,6 +1771,7 @@ const char *GetMimeType(const char *zName, int nName){
     { "vivo",       4, "video/vnd.vivo"                    },
     { "vrml",       4, "model/vrml"                        },
     { "vsix",       4, "application/vsix"                  },
+    { "wasm",       4, "application/wasm"                  },
     { "wav",        3, "audio/x-wav"                       },
     { "wax",        3, "audio/x-ms-wax"                    },
     { "wiki",       4, "application/x-fossil-wiki"         },
