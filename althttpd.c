@@ -2542,6 +2542,7 @@ void ProcessOneRequest(int forceClose, int socketId){
   FILE *hdrLog = 0;         /* Log file for complete header content */
 #endif
   char zLine[10000];        /* A buffer for input lines or forming names */
+  const MimeTypeDef *pMimeType = 0; /* URI's mimetype */
 
 
   /* Must see a header within 10 seconds for the first request.
@@ -3007,7 +3008,9 @@ void ProcessOneRequest(int forceClose, int socketId){
 
   /* Take appropriate action
   */
-  if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0 ){ /* CGI */
+  if( (statbuf.st_mode & 0100)==0100 && access(zFile,X_OK)==0
+      && (!(pMimeType = GetMimeType(zFile, lenFile))
+          || 0==(pMimeType->flags & MTF_NOCGI)) ){ /* CGI */
     char *zBaseFilename;       /* Filename without directory prefix */
     int px[2];                 /* CGI-1 to althttpd pipe */
     int py[2];                 /* zPostData to CGI-0 pipe */
