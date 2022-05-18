@@ -41,9 +41,16 @@
 **        contain content.  The directory is chosen based on the HTTP_HOST
 **        request header.  If there is no HTTP_HOST header or if the
 **        corresponding host directory does not exist, then the
-**        "default.website" is used.  If the HTTP_HOST header contains any
-**        charaters other than [a-zA-Z0-9_.,*~/] then a 403 error is
-**        generated.
+**        "default.website" is used.
+**
+**        In stand-alone mode (when the --port option is used) if neither
+**        the HTTP_HOST.website nor "default.website" directories exist,
+**        then files are served directly from the root directory.  In
+**        one-require mode (when the --port option is not used) then an
+**        error is raised if "default.website" does not exist.
+**
+**        If the HTTP_HOST header contains any charaters other than
+**        [a-zA-Z0-9_.,*~/] then a 403 error is generated.
 **
 **    (3) Any file or directory whose name begins with "." or "-" is ignored,
 **        except if the URL begins with "/.well-known/" then initial "." and
@@ -64,7 +71,9 @@
 **        for HTTP Basic authorization.  See file format details below.
 **
 **    (7) To run as a stand-alone server, simply add the "-port N" command-line
-**        option to define which TCP port to listen on.
+**        option to define which TCP port to listen on.  If the argument is
+**        "--port N1..N2" then TCP ports between N1 and N2 are scanned looking
+**        for one that is open and the first open port is used.
 **
 **    (8) For static content, the mimetype is determined by the file suffix
 **        using a table built into the source code below.  If you have
@@ -91,7 +100,8 @@
 **                   This option is required for xinetd launch but defaults
 **                   to "." for a stand-alone web server.
 **
-**  --port N         Run in standalone mode listening on TCP port N
+**  --port N         Run in standalone mode listening on TCP port N, or from
+**  --port N1..N2    the first available TCP port in the range from N1 to N2.
 **
 **  --user USER      Define the user under which the process should run if
 **                   originally launched as root.  This process will refuse to
@@ -120,6 +130,15 @@
 **                   decoded upstream, perhaps by stunnel. This option
 **                   does *not* activate built-in TLS support.  Use --cert
 **                   for that.
+**
+**  --page NAME      Come up in stand-alone mode, and then try to launch a
+**                   web-browser pointing to the NAME document after the
+**                   listening socket has been created.  This option
+**                   implies --loopback and "--page 8080..8100".
+**
+**  --loopback       Only accept loop-back TCP connections (connections
+**                   originating from the same host).  This is the
+**                   default if --root is omitted.
 **
 **  --family ipv4    Only accept input from IPV4 or IPV6, respectively.
 **  --family ipv6    These options are only meaningful if althttpd is run
@@ -3135,6 +3154,30 @@ void ProcessOneRequest(int forceClose, int socketId){
   omitLog = 1;
 }
 
+/*
+** Launch a web-browser pointing to zPage
+*/
+static void launch_web_browser(const char *zPath, int iPort){
+  char zUrl[2000];
+  static const char *const azBrowserProg[] = {
+#if defined(__DARWIN__) || defined(__APPLE__) || defined(__HAIKU__)
+       "open"
+#else
+       "xdg-open", "gnome-open", "firefox", "google-chrome"
+#endif
+  };
+  size_t i;
+
+  if( strlen(zPath)<=sizeof(zUrl)-1000 ){
+    while( zPath[0]=='/' ) zPath++;
+    sprintf(zUrl, "http://localhost:%d/%s", iPort, zPath);
+    for(i=0; i<sizeof(azBrowserProg)/sizeof(azBrowserProg[0]); i++){
+      execlp(azBrowserProg[i], azBrowserProg[i], zUrl, (char*)0);
+    }
+  }
+  exit(1);
+}
+
 #define MAX_PARALLEL 50  /* Number of simultaneous children */
 
 /*
@@ -3164,6 +3207,7 @@ typedef union {
 int http_server(
   int mnPort, int mxPort,   /* Range of TCP ports to try */
   int bLocalhost,           /* Listen on loopback sockets only */
+  const char *zPage,        /* Launch web browser on this document */
   int *httpConnection       /* Socket over which HTTP request arrives */
 ){
   int listener = -1;           /* The server socket */
@@ -3204,17 +3248,28 @@ int http_server(
   }
   if( iPort>mxPort ){
     if( mnPort==mxPort ){
-      fprintf(stderr,"unable to open listening socket on port %d", mnPort);
+      fprintf(stderr,"unable to open listening socket on port %d\n", mnPort);
     }else{
       fprintf(stderr,"unable to open listening socket on any"
-                     " port in the range %d..%d", mnPort, mxPort);
+                     " port in the range %d..%d\n", mnPort, mxPort);
     }
+    exit(1);
   }
   if( iPort>mxPort ) return 1;
   listen(listener,10);
   printf("Listening for %s requests on TCP port %d\n",
          useHttps?"TLS-encrypted HTTPS":"HTTP",  iPort);
   fflush(stdout);
+  if( zPage ){
+    child = fork();
+    if( child!=0 ){
+      if( child>0 ) nchildren++;
+    }else{
+      launch_web_browser(zPage, iPort);
+      /* NOT REACHED */
+      exit(1);
+    }
+  }
   while( 1 ){
     if( nchildren>MAX_PARALLEL ){
       /* Slow down if connections are arriving too fast */
@@ -3268,6 +3323,7 @@ int main(int argc, const char **argv){
   struct passwd *pwd = 0;    /* Information about the user */
   int httpConnection = 0;    /* Socket ID of inbound http connection */
   int bLocalhost = 0;        /* Bind to loop-back TCP ports only */
+  const char *zPage = 0;     /* Starting page */
 
   /* Record the time when processing begins.
   */
@@ -3312,6 +3368,18 @@ int main(int argc, const char **argv){
     if( strcmp(z,"-max-cpu")==0 ){
       maxCpu = atoi(zArg);
     }else
+    if( strcmp(z,"-loopback")==0 ){
+      bLocalhost = 1;
+    }else
+    if( strcmp(z,"-page")==0 ){
+      zPage = zArg;
+      bLocalhost = 1;
+      if( mnPort==0 ){
+        mnPort = 8080;
+        mxPort = 8100;
+      }
+      standalone = 1 + (useHttps==2);
+    }else
     if( strcmp(z,"-https")==0 ){
       int const x = atoi(zArg);
       if( x<=0 ){
@@ -3326,7 +3394,18 @@ int main(int argc, const char **argv){
       }
     }else
     if( strcmp(z, "-port")==0 ){
-      mnPort = mxPort = atoi(zArg);
+      int ii;
+      mnPort = mxPort = 0;
+      for(ii=0; zArg[ii]>='0' && zArg[ii]<='9'; ii++){
+        mnPort = mnPort*10 + zArg[ii] - '0';
+      }
+      if( zArg[ii]==0 ){
+        mxPort = mnPort;
+      }else if( zArg[ii]=='.' && zArg[ii+1]=='.' ){
+        for(ii+=2; zArg[ii]>='0' && zArg[ii]<='9'; ii++){
+          mxPort = mxPort*10 + zArg[ii] - '0';
+        }
+      }
       standalone = 1 + (useHttps==2);
     }else
     if( strcmp(z, "-family")==0 ){
@@ -3434,7 +3513,7 @@ int main(int argc, const char **argv){
 
   /* Activate the server, if requested */
   if( mnPort>0 && mnPort<=mxPort
-   && http_server(mnPort, mxPort, bLocalhost, &httpConnection)
+   && http_server(mnPort, mxPort, bLocalhost, zPage, &httpConnection)
   ){
     Malfunction(520, /* LOG: server startup failed */
                 "failed to start server");
