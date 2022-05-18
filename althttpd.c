@@ -2932,6 +2932,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       i++; j++;
     }
     zLine[j] = 0;
+    /* fprintf(stderr, "searching [%s]...\n", zLine); */
     if( stat(zLine,&statbuf)!=0 ){
       int stillSearching = 1;
       while( stillSearching && i>0 && j>j0 ){
@@ -3160,131 +3161,113 @@ typedef union {
 ** When it accept()s a connection, the socket ID is written to the
 ** final argument.
 */
-int http_server(const char *zPort, int localOnly, int * httpConnection){
-  int listener[20];            /* The server sockets */
+int http_server(
+  int mnPort, int mxPort,   /* Range of TCP ports to try */
+  int bLocalhost,           /* Listen on loopback sockets only */
+  int *httpConnection       /* Socket over which HTTP request arrives */
+){
+  int listener = -1;           /* The server socket */
   int connection;              /* A socket for each individual connection */
   fd_set readfds;              /* Set of file descriptors for select() */
-  address inaddr;              /* Remote address */
   socklen_t lenaddr;           /* Length of the inaddr structure */
   int child;                   /* PID of the child process */
   int nchildren = 0;           /* Number of child processes */
   struct timeval delay;        /* How long to wait inside select() */
+  struct sockaddr_in inaddr;   /* The socket address */
   int opt = 1;                 /* setsockopt flag */
-  struct addrinfo sHints;      /* Address hints */
-  struct addrinfo *pAddrs, *p; /* */
-  int rc;                      /* Result code */
-  int i, n;
-  int maxFd = -1;
-  
-  memset(&sHints, 0, sizeof(sHints));
-  if( ipv4Only ){
-    sHints.ai_family = PF_INET;
-    /*althttpd_printf("ipv4 only\n");*/
-  }else if( ipv6Only ){
-    sHints.ai_family = PF_INET6;
-    /*althttpd_printf("ipv6 only\n");*/
-  }else{
-    sHints.ai_family = PF_UNSPEC;
+  int iPort = mnPort;
+
+  while( iPort<=mxPort ){
+    memset(&inaddr, 0, sizeof(inaddr));
+    inaddr.sin_family = AF_INET;
+    if( bLocalhost ){
+      inaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    }else{
+      inaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
+    inaddr.sin_port = htons(iPort);
+    listener = socket(AF_INET, SOCK_STREAM, 0);
+    if( listener<0 ){
+      iPort++;
+      continue;
+    }
+
+    /* if we can't terminate nicely, at least allow the socket to be reused */
+    setsockopt(listener,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
+
+    if( bind(listener, (struct sockaddr*)&inaddr, sizeof(inaddr))<0 ){
+      close(listener);
+      iPort++;
+      continue;
+    }
+    break;
   }
-  sHints.ai_socktype = SOCK_STREAM;
-  sHints.ai_flags = AI_PASSIVE;
-  sHints.ai_protocol = 0;
-  rc = getaddrinfo(localOnly ? "localhost": 0, zPort, &sHints, &pAddrs);
-  if( rc ){
-    fprintf(stderr, "could not get addr info: %s", 
-            rc!=EAI_SYSTEM ? gai_strerror(rc) : strerror(errno));
-    return 1;
-  }
-  for(n=0, p=pAddrs; n<(int)(sizeof(listener)/sizeof(listener[0])) && p!=0;
-        p=p->ai_next){
-    listener[n] = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-    if( listener[n]>=0 ){
-      /* if we can't terminate nicely, at least allow the socket to
-      ** be reused */
-      setsockopt(listener[n], SOL_SOCKET, SO_REUSEADDR,&opt, sizeof(opt));
-      
-#if defined(IPV6_V6ONLY)
-      if( p->ai_family==AF_INET6 ){
-        int v6only = 1;
-        setsockopt(listener[n], IPPROTO_IPV6, IPV6_V6ONLY,
-                    &v6only, sizeof(v6only));
-      }
-#endif
-      
-      if( bind(listener[n], p->ai_addr, p->ai_addrlen)<0 ){
-        printf("bind failed: %s\n", strerror(errno));
-        close(listener[n]);
-        continue;
-      }
-      if( listen(listener[n], 20)<0 ){
-        printf("listen() failed: %s\n", strerror(errno));
-        close(listener[n]);
-        continue;
-      }
-      n++;
+  if( iPort>mxPort ){
+    if( mnPort==mxPort ){
+      fprintf(stderr,"unable to open listening socket on port %d", mnPort);
+    }else{
+      fprintf(stderr,"unable to open listening socket on any"
+                     " port in the range %d..%d", mnPort, mxPort);
     }
   }
-  if( n==0 ){
-    fprintf(stderr, "cannot open any sockets\n");
-    return 1;
-  }
-
+  if( iPort>mxPort ) return 1;
+  listen(listener,10);
+  printf("Listening for %s requests on TCP port %d\n",
+         useHttps?"TLS-encrypted HTTPS":"HTTP",  iPort);
+  fflush(stdout);
   while( 1 ){
     if( nchildren>MAX_PARALLEL ){
       /* Slow down if connections are arriving too fast */
       sleep( nchildren-MAX_PARALLEL );
     }
-    delay.tv_sec = 60;
-    delay.tv_usec = 0;
+    delay.tv_sec = 0;
+    delay.tv_usec = 100000;
     FD_ZERO(&readfds);
-    for(i=0; i<n; i++){
-      assert( listener[i]>=0 );
-      FD_SET( listener[i], &readfds);
-      if( listener[i]>maxFd ) maxFd = listener[i];
-    }
-    select( maxFd+1, &readfds, 0, 0, &delay);
-    for(i=0; i<n; i++){
-      if( FD_ISSET(listener[i], &readfds) ){
-        lenaddr = sizeof(inaddr);
-        connection = accept(listener[i], &inaddr.sa, &lenaddr);
-        if( connection>=0 ){
-          child = fork();
-          if( child!=0 ){
-            if( child>0 ) nchildren++;
-            close(connection);
-            /* printf("subprocess %d started...\n", child); fflush(stdout); */
-          }else{
-            int nErr = 0, fd;
-            close(0);
-            fd = dup(connection);
-            if( fd!=0 ) nErr++;
-            close(1);
-            fd = dup(connection);
-            if( fd!=1 ) nErr++;
-            close(connection);
-            *httpConnection = fd;
-            return nErr;
-          }
+    assert( listener>=0 );
+    FD_SET( listener, &readfds);
+    select( listener+1, &readfds, 0, 0, &delay);
+    if( FD_ISSET(listener, &readfds) ){
+      lenaddr = sizeof(inaddr);
+      connection = accept(listener, (struct sockaddr*)&inaddr, &lenaddr);
+      if( connection>=0 ){
+        child = fork();
+        if( child!=0 ){
+          if( child>0 ) nchildren++;
+          close(connection);
+          /* printf("subprocess %d started...\n", child); fflush(stdout); */
+        }else{
+          int nErr = 0, fd;
+          close(0);
+          fd = dup(connection);
+          if( fd!=0 ) nErr++;
+          close(1);
+          fd = dup(connection);
+          if( fd!=1 ) nErr++;
+          close(connection);
+          *httpConnection = fd;
+          return nErr;
         }
       }
-      /* Bury dead children */
-      while( (child = waitpid(0, 0, WNOHANG))>0 ){
-        /* printf("process %d ends\n", child); fflush(stdout); */
-        nchildren--;
-      }
+    }
+    /* Bury dead children */
+    while( (child = waitpid(0, 0, WNOHANG))>0 ){
+      /* printf("process %d ends\n", child); fflush(stdout); */
+      nchildren--;
     }
   }
-  /* NOT REACHED */  
+  /* NOT REACHED */
   exit(1);
 }
 
 int main(int argc, const char **argv){
   int i;                     /* Loop counter */
   const char *zPermUser = 0; /* Run daemon with this user's permissions */
-  const char *zPort = 0;     /* Implement an HTTP server on this port */
+  int mnPort = 0;            /* Range of TCP ports for server mode */
+  int mxPort = 0;
   int useChrootJail = 1;     /* True to use a change-root jail */
   struct passwd *pwd = 0;    /* Information about the user */
   int httpConnection = 0;    /* Socket ID of inbound http connection */
+  int bLocalhost = 0;        /* Bind to loop-back TCP ports only */
 
   /* Record the time when processing begins.
   */
@@ -3343,7 +3326,7 @@ int main(int argc, const char **argv){
       }
     }else
     if( strcmp(z, "-port")==0 ){
-      zPort = zArg;
+      mnPort = mxPort = atoi(zArg);
       standalone = 1 + (useHttps==2);
     }else
     if( strcmp(z, "-family")==0 ){
@@ -3394,12 +3377,13 @@ int main(int argc, const char **argv){
     argc -= 2;
   }
   if( zRoot==0 ){
-    if( standalone ){
-      zRoot = ".";
-    }else{
-      Malfunction(516, /* LOG: --root argument missing */
-                  "no --root specified");
+    if( !standalone ){
+      mnPort = 8080;
+      mxPort = 8100;
     }
+    standalone = 1;
+    bLocalhost = 1;
+    zRoot = ".";
   }
 
   /*
@@ -3449,7 +3433,9 @@ int main(int argc, const char **argv){
   }
 
   /* Activate the server, if requested */
-  if( zPort && http_server(zPort, 0, &httpConnection) ){
+  if( mnPort>0 && mnPort<=mxPort
+   && http_server(mnPort, mxPort, bLocalhost, &httpConnection)
+  ){
     Malfunction(520, /* LOG: server startup failed */
                 "failed to start server");
   }
