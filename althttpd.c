@@ -2075,9 +2075,13 @@ static int SendFile(
   const char *zContentType;
   time_t t;
   FILE *in;
+  size_t szFilename;
   char zETag[100];
-  const MimeTypeDef * pMimeType;
+  const MimeTypeDef *pMimeType;
   int bAddCharset = 1;
+  const char *zEncoding = 0;
+  struct stat statbuf;
+  char zGzFilename[2000];
 
   pMimeType = GetMimeType(zFile, lenFile);
   zContentType = pMimeType
@@ -2101,6 +2105,24 @@ static int SendFile(
     MakeLogEntry(0, 470);  /* LOG: ETag Cache Hit */
     return 1;
   }
+  if( rangeEnd<=0
+   && zAcceptEncoding
+   && strstr(zAcceptEncoding,"gzip")!=0
+  ){
+    szFilename = strlen(zFile);
+    if( szFilename < sizeof(zGzFilename)-10 ){
+      memcpy(zGzFilename, zFile, szFilename);
+      memcpy(zGzFilename + szFilename, ".gz", 4);
+      if( access(zGzFilename, R_OK)==0 ){
+        memset(&statbuf, 0, sizeof(statbuf));
+        if( stat(zGzFilename, &statbuf)==0 ){
+          zEncoding = "gzip";
+          zFile = zGzFilename;
+          pStat = &statbuf;
+        }      
+      }
+    }
+  }
   in = fopen(zFile,"rb");
   if( in==0 ) NotFound(480); /* LOG: fopen() failed for static content */
   if( rangeEnd>0 && rangeStart<pStat->st_size ){
@@ -2120,6 +2142,9 @@ static int SendFile(
   nOut += althttpd_printf("ETag: \"%s\"\r\n", zETag);
   nOut += althttpd_printf("Content-type: %s%s\r\n",zContentType,
                           bAddCharset ? "; charset=utf-8" : "");
+  if( zEncoding ){
+    nOut += althttpd_printf("Content-encoding: %s\r\n", zEncoding);
+  }
   nOut += althttpd_printf("Content-length: %d\r\n\r\n",(int)pStat->st_size);
   fflush(stdout);
   if( strcmp(zMethod,"HEAD")==0 ){
