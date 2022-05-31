@@ -24,13 +24,12 @@ one connection.  A single althttpd
 process will handle one or more HTTP requests over the same connection.
 When the connection closes, the althttpd process exits.
 
-Althttpd can also operate stand-alone. Althttpd
-itself listens on port 80 for incoming HTTP requests (or 443 for
-incoming HTTPS requests), then forks
-a copy of itself to handle each inbound connection.  Each connection
-is still handled using a separate process.  The only difference is
-that the connection-handler process is now started by a master
-althttpd instance rather than by xinetd.
+Althttpd can also operate stand-alone. Althttpd itself listens on port
+80 for incoming HTTP requests (or 443 for incoming HTTPS requests),
+then forks a copy of itself to handle each inbound connection.  Each
+connection is still handled using a separate process.  The only
+difference is that the connection-handler process is now started by a
+master althttpd instance rather than by xinetd.
 
 Althttpd has no configuration file. All configuration is handled
 using a few command-line arguments. This helps to keep the
@@ -495,3 +494,22 @@ Banishment files are initially 1 byte in size. But if a banishment
 expires and then a new request arrives prior to 5 minutes per byte of
 block-file size, then the file grows by one byte and the mtime is
 reset.
+
+<a id="gzip"></a>
+GZip Content Compression
+------------------------
+
+Althttpd has basic support for server-side content compression, which
+often reduces the over-the-wire cost of files by more than half.
+Rather than add a dependency on a compression library to althttpd, it
+relies on the client to provide content in both compressed and
+uncompressed forms.
+
+When serving a file, if the client expresses support for gzip
+compression and a file with the same name plus a `.gz` extension is
+found, the gzipped copy of the file is served to the client with a
+response header indicating that it is gzipped. To the user, it appears
+as if the originally-requested file is served compressed. Under the
+hood, however, a different file is served.
+
+Note that this feature only supports static files, not CGI.
