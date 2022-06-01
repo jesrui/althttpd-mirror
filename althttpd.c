@@ -134,7 +134,7 @@
 **  --page NAME      Come up in stand-alone mode, and then try to launch a
 **                   web-browser pointing to the NAME document after the
 **                   listening socket has been created.  This option
-**                   implies --loopback and "--page 8080..8100".
+**                   implies --loopback and "--port 8080..8100".
 **
 **  --loopback       Only accept loop-back TCP connections (connections
 **                   originating from the same host).  This is the
