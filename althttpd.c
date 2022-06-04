@@ -2799,6 +2799,7 @@ void ProcessOneRequest(int forceClose, int socketId){
       "Chrome/0.A.B.C",
       "Neevabot/",
       "BLEXBot/",
+      "Synapse",
     };
     size_t ii;
     for(ii=0; ii<sizeof(azDisallow)/sizeof(azDisallow[0]); ii++){
