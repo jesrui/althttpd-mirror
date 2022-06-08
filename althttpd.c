@@ -1695,7 +1695,11 @@ const MimeTypeDef *GetMimeType(const char *zName, int nName){
   { "jpeg",       4, 0x00, "image/jpeg"                       },
   { "jpe",        3, 0x00, "image/jpeg"                       },
   { "jpg",        3, 0x00, "image/jpeg"                       },
-  { "js",         2, 0x00, "application/x-javascript"         },
+  { "js",         2, 0x00, "text/x-javascript"                },
+  /* application/javascript is commonly used for JS, but the
+  ** HTML spec says text/javascript is correct:
+  ** https://html.spec.whatwg.org/multipage/scripting.html
+  ** #scriptingLanguages:javascript-mime-type */
   { "kar",        3, 0x00, "audio/midi"                       },
   { "latex",      5, 0x00, "application/x-latex"              },
   { "lha",        3, 0x00, "application/octet-stream"         },
@@ -1710,6 +1714,7 @@ const MimeTypeDef *GetMimeType(const char *zName, int nName){
   { "midi",       4, 0x00, "audio/midi"                       },
   { "mif",        3, 0x00, "application/x-mif"                },
   { "mime",       4, 0x00, "www/mime"                         },
+  { "mjs",        3, 0x00, "text/javascript" /*EM6 modules*/  },
   { "movie",      5, 0x00, "video/x-sgi-movie"                },
   { "mov",        3, 0x00, "video/quicktime"                  },
   { "mp2",        3, 0x00, "audio/mpeg"                       },
