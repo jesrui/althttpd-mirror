@@ -1700,6 +1700,7 @@ const MimeTypeDef *GetMimeType(const char *zName, int nName){
   ** HTML spec says text/javascript is correct:
   ** https://html.spec.whatwg.org/multipage/scripting.html
   ** #scriptingLanguages:javascript-mime-type */
+  { "json",       4, 0x00, "application/json"                 },
   { "kar",        3, 0x00, "audio/midi"                       },
   { "latex",      5, 0x00, "application/x-latex"              },
   { "lha",        3, 0x00, "application/octet-stream"         },
