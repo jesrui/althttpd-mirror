@@ -156,7 +156,7 @@
 **                   HTTP connection.  Default 30 (build option:
 **                   -DMAX_CPU=integer). 0 means no limit.
 **
-**  --debug          Disables input timeouts.  This is useful for debugging
+**  --debug BOOLEAN  Disables input timeouts.  This is useful for debugging
 **                   when inputs are being typed in manually.
 **
 ** Additional command-line options available when compiling with ENABLE_TLS:
